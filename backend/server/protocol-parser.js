@@ -815,7 +815,17 @@ class ProtocolParser {
         responseContent = 'LK';
         break;
       case 'CR':
-        return null; // Evitar bucle de eco con CR
+      case 'FIND':
+      case 'HRTSTART':
+      case 'ANYTIME':
+      case 'MONITOR':
+      case 'FALLDET':
+      case 'IP':
+      case 'UPLOAD':
+      case 'RESET':
+      case 'POWEROFF':
+      case 'FACTORY':
+        return null; // Evitar bucles de eco para comandos iniciados por el servidor
       case 'UD':
       case 'UD_WCDMA':
       case 'UD_LTE':
