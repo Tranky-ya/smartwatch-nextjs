@@ -1,0 +1,20 @@
+{
+  "name": "smartwatch-admin-v3",
+  "version": "3.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4",
+    "lucide-react": "^0.562.0",
+    "next": "14.2.18",
+    "react": "^18",
+    "react-dom": "^18",
+    "recharts": "^3.6.0",
+    "sharp": "^0.34.5"
+  }
+}

@@ -1,0 +1,724 @@
+const net = require('net');
+const { EventEmitter } = require('events');
+require('dotenv').config();
+const ProtocolParser = require('./protocol-parser');
+const { Device, Position, Alert, HealthData } = require('./models');
+const { sequelize, testConnection } = require('./database');
+const { QueryTypes } = require('sequelize');
+const HybridLocationEngine = require("./hybrid-location-engine");
+const SmartwatchParser = require("./smartwatch-parser");
+
+function extractFrames(buffer) {
+  const frames = [];
+  let current = '';
+  let inside = false;
+
+  for (const ch of buffer) {
+    if (ch === '[') {
+      inside = true;
+      current = '[';
+      continue;
+    }
+
+    if (inside) {
+      current += ch;
+    }
+
+    if (ch === ']' && inside) {
+      frames.push(current);
+      current = '';
+      inside = false;
+    }
+  }
+
+  return frames;
+}
+
+class TCPServer extends EventEmitter {
+  constructor(host, port, websocketServer = null) {
+    super();
+    this.host = host || process.env.TCP_SERVER_HOST || '0.0.0.0';
+    this.port = port || process.env.TCP_SERVER_PORT || 7070;
+    this.server = null;
+    this.connections = new Map();
+    this.websocketServer = websocketServer;
+    
+    // Inicializar motor híbrido de localización
+    this.locationEngine = new HybridLocationEngine({
+      googleApiKey: process.env.GOOGLE_GEOLOCATION_API_KEY,
+      opencellIdToken: process.env.OPENCELLID_API_TOKEN,
+      smoothingAlpha: parseFloat(process.env.SMOOTHING_ALPHA) || 0.25,
+      maxJumpMeters: parseInt(process.env.MAX_JUMP_METERS) || 40,
+      maxSpeedKmh: parseInt(process.env.MAX_SPEED_KMH) || 15,
+      stationaryTimeSeconds: parseInt(process.env.STATIONARY_TIME_SECONDS) || 30,
+      cacheTTLMinutes: parseInt(process.env.CACHE_TTL_MINUTES) || 60,
+      mapMatchingEnabled: process.env.MAP_MATCHING_ENABLED === "true",
+      logLevel: process.env.LOG_LEVEL || "info"
+    });
+    console.log("✅ Motor Híbrido de Localización inicializado");
+  }
+
+  setWebSocketServer(websocketServer) {
+    this.websocketServer = websocketServer;
+    console.log('✅ WebSocket Server vinculado al TCP Server');
+  }
+
+  async start() {
+    try {
+      await testConnection();
+      this.server = net.createServer((socket) => {
+        this.handleConnection(socket);
+      });
+
+      this.server.listen(this.port, this.host, () => {
+        console.log(`\n🚀 Servidor TCP iniciado en ${this.host}:${this.port}`);
+        console.log(`📡 Esperando conexiones de dispositivos...\n`);
+      });
+
+      this.server.on('error', (error) => {
+        console.error('❌ Error en servidor TCP:', error);
+      });
+    } catch (error) {
+      console.error('❌ Error iniciando servidor TCP:', error);
+      process.exit(1);
+    }
+  }
+
+  
+
+  handleConnection(socket) {
+    const clientInfo = `${socket.remoteAddress}:${socket.remotePort}`;
+    console.log(`🔌 Nueva conexión desde ${clientInfo}`);
+
+    let buffer = '';
+    let currentDevice = null;
+    const processMessage = this.processMessage.bind(this);
+
+    socket.on('data', async (data) => {
+      try {
+        // 📨 LOG RAW: Ver exactamente qué entra (con caracteres invisibles, \r, \n, espacios)
+        const rawString = data.toString('utf8');
+        console.log(`\n📨 RAW [${clientInfo}] >>> ${JSON.stringify(rawString)}`);
+        console.log(`   Bytes: [${Array.from(data).map(b => '0x' + b.toString(16).padStart(2, '0')).join(', ')}]`);
+        
+        buffer += rawString;
+
+        // 1) Procesar frames del protocolo aunque vengan concatenados sin CR/LF:
+        //    [..][..]\r\n  => se procesan ambos bloques.
+        while (true) {
+          const start = buffer.indexOf('[');
+          if (start === -1) break;
+
+          if (start > 0) {
+            const junk = buffer.slice(0, start);
+            if (junk.trim()) {
+              console.warn(`⚠️ [${clientInfo}] Bytes fuera de frame descartados: ${JSON.stringify(junk)}`);
+            }
+            buffer = buffer.slice(start);
+          }
+
+          const end = buffer.indexOf(']');
+          if (end === -1) break; // frame incompleto, esperar más data
+
+          const frame = buffer.slice(0, end + 1);
+          buffer = buffer.slice(end + 1);
+
+          const cleanedFrame = frame.trim();
+          if (!cleanedFrame) continue;
+
+          console.log(`🧹 LIMPIO [${clientInfo}] >>> ${JSON.stringify(cleanedFrame)}`);
+          console.log(`   Largo: ${cleanedFrame.length} caracteres`);
+          console.log(`🧪 [${clientInfo}] ▶ VALIDANDO FORMATO...`);
+          currentDevice = await processMessage(socket, cleanedFrame, currentDevice);
+        }
+
+        // 2) Procesar comandos/manuales por líneas (telnet/hercules), si quedaron
+        //    datos que NO son frames.
+        if (buffer.includes('\n') || buffer.includes('\r')) {
+          const parts = buffer.split(/[\r\n]+/);
+          buffer = parts.pop() || '';
+
+          for (const part of parts) {
+            const cleaned = part.trim();
+            if (!cleaned) continue;
+
+            // Si parece inicio de frame incompleto, no lo consumas aquí.
+            if (cleaned.startsWith('[') && !cleaned.includes(']')) {
+              buffer = cleaned + buffer;
+              continue;
+            }
+
+            console.log(`🧹 LIMPIO [${clientInfo}] >>> ${JSON.stringify(cleaned)}`);
+            console.log(`   Largo: ${cleaned.length} caracteres`);
+
+            if (cleaned.toLowerCase() === 'exit' || cleaned.toLowerCase() === 'quit') {
+              console.log(`🚪 [${clientInfo}] Comando EXIT/QUIT manual recibido - cerrando conexión`);
+              socket.end();
+              return;
+            }
+
+            console.log(`🧪 [${clientInfo}] ▶ VALIDANDO FORMATO...`);
+            currentDevice = await processMessage(socket, cleaned, currentDevice);
+          }
+        }
+      } catch (error) {
+        console.error(`❌ Error procesando datos de ${clientInfo}:`, error.stack);
+      }
+    });
+
+    socket.on('end', () => {
+      if (currentDevice) {
+        console.log(`📴 [${currentDevice.imei}] Desconectado`);
+        this.connections.delete(currentDevice.imei);
+        currentDevice.update({ is_online: false }).catch(console.error);
+      } else {
+        console.log(`📴 Desconectado ${clientInfo}`);
+      }
+    });
+
+    socket.on('error', (error) => {
+      console.error(`❌ Error en conexión ${clientInfo}:`, error.message);
+    });
+  }
+
+  async processMessage(socket, message, currentDevice) {
+    try {
+      console.log(`\n🔍 [PARSE] Iniciando análisis de mensaje...`);
+      
+      const parsed = ProtocolParser.parse(message);
+
+      if (!parsed) {
+        console.warn(`❌ [PARSE] Mensaje NO parseado/rechazado por validación`);
+        console.warn(`   Mensaje original: ${JSON.stringify(message)}`);
+        return currentDevice;
+      }
+
+      console.log(`✅ [PARSE] Mensaje parseado exitosamente`);
+      console.log(`   Tipo: ${parsed.type}`);
+      console.log(`   IMEI: ${parsed.imei}`);
+
+      if (!String(parsed.imei || '').match(/^\d{10}$/)) {
+        console.warn(`❌ [PARSE] IMEI inválido desde parser, descartando para evitar device fantasma`);
+        console.warn(`   Tipo: ${parsed.type}, IMEI: ${JSON.stringify(parsed.imei)}, Mensaje: ${JSON.stringify(message)}`);
+        return currentDevice;
+      }
+
+      let device = currentDevice;
+      if (!device || device.imei !== parsed.imei) {
+        console.log(`🔍 [DB] Buscando dispositivo ${parsed.imei} en BD...`);
+        device = await Device.findOne({ where: { imei: parsed.imei } });
+        
+        if (!device) {
+          console.warn(`⚠️ [DB] Dispositivo ${parsed.imei} NO encontrado - Creando nuevo...`);
+          device = await Device.create({
+            imei: parsed.imei,
+            name: `Device ${parsed.imei}`,
+            organization_id: 'e5998eca-315a-44c6-a352-90d22380c5e8',
+            is_online: true
+          });
+          console.log(`✅ [DB] Dispositivo creado exitosamente`);
+        } else {
+          console.log(`✅ [DB] Dispositivo encontrado en BD`);
+        }
+
+        this.connections.set(parsed.imei, socket);
+      }
+
+      console.log(`🔄 [DB] Actualizando estado: is_online=true, last_seen=${new Date().toISOString()}`);
+      await device.update({
+        is_online: true,
+        last_seen: new Date()
+      });
+
+      console.log(`📨 [ROUTER] Ruteando al handler de tipo: ${parsed.type}`);
+
+      switch (parsed.type) {
+        case 'LK':
+          await this.handleHeartbeat(device, parsed);
+          break;
+        case 'UD':
+          await this.handlePosition(device, parsed);
+          break;
+        case 'AL':
+          await this.handleAlarm(device, parsed);
+          break;
+        case 'bphrt':
+          await this.handleHealthData(device, parsed);
+          break;
+        case 'CR':
+          await this.handleCR(device, parsed);
+          break;
+        case 'HANDSHAKE':
+          await this.handleHandshake(device, parsed);
+          break;
+      }
+
+      // Generar respuesta según el protocolo Beesure
+      // ⚠️ IMPORTANTE:
+      // - No responder a CR (eco)
+      // - No responder a UNKNOWN
+      // - No responder a UD (tracking); el reloj NO espera ACK
+      if (parsed.type !== 'CR' && parsed.type !== 'UNKNOWN' && parsed.type !== 'UD') {
+        const response = ProtocolParser.generateCommandResponse(device.imei, parsed.type);
+        const responseWithNewline = response + '\n';
+        
+        console.log(`\n✅ [RESPONSE] Respuesta generada`);
+        console.log(`📤 [${device.imei}] Mensaje: ${JSON.stringify(response)}`);
+        console.log(`📤 [${device.imei}] Con \\n: ${JSON.stringify(responseWithNewline)}`);
+        console.log(`📤 [${device.imei}] Bytes: [${Array.from(Buffer.from(responseWithNewline)).map(b => '0x' + b.toString(16).padStart(2, '0')).join(', ')}]`);
+        
+        socket.write(responseWithNewline);
+        console.log(`✅ [${device.imei}] ✓ Respuesta enviada exitosamente`);
+      } else {
+        console.log(`ℹ️ [${device.imei}] Sin respuesta para tipo: ${parsed.type}`);
+      }
+
+      // Notificar al WebSocket sobre la actualización del dispositivo
+      if (this.websocketServer && parsed.type === 'LK') {
+        this.websocketServer.emitHeartbeat(device);
+      } else if (this.websocketServer && parsed.type === 'UD') {
+        // Las posiciones se notifican en handlePosition()
+      }
+
+      return device;
+    } catch (error) {
+      console.error('❌ Error procesando mensaje:', error);
+      return currentDevice;
+    }
+  }
+
+  async handleHeartbeat(device, parsed) {
+    try {
+      await device.update({
+        battery_level: parsed.battery,
+        steps_today: parsed.steps
+      });
+
+      console.log(`💓 [${device.imei}] Heartbeat - Batería: ${parsed.battery}%, Pasos: ${parsed.steps}`);
+
+      if (parsed.battery < 20) {
+        await Alert.create({
+          device_id: device.id,
+          alert_type: 'LOW_BATTERY',
+          severity: 'MEDIUM',
+          message: `Batería baja: ${parsed.battery}%`,
+          status: 'NEW',
+          triggered_at: new Date()
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error en heartbeat:', error);
+    }
+  }
+
+  async handlePosition(device, parsed) {
+    try {
+      // Parsear el mensaje completo con el nuevo parser
+      const rawData = {
+        imei: device.imei,
+        gpsStatus: parsed.valid === 'A' ? 'A' : 'V',
+        satellites: parsed.satellites || 0,
+        latitude: parseFloat(parsed.latitude),
+        longitude: parseFloat(parsed.longitude),
+        speed: parseFloat(parsed.speed) || 0,
+        direction: parseFloat(parsed.direction) || 0,
+        altitude: parseFloat(parsed.altitude) || 0,
+        battery: parsed.battery || 0,
+        
+        // Datos LBS (Cell Tower)
+        mcc: parsed.mcc || 0,
+        mnc: parsed.mnc || 0,
+        lac: parsed.lac || 0,
+        cellId: parsed.cellId || 0,
+        signalStrength: parsed.signalStrength || 0,
+        
+        // WiFi Access Points
+        wifiAccessPoints: parsed.wifiAccessPoints || [],
+        
+        timestamp: parsed.timestamp || new Date()
+      };
+
+      console.log(`📍 [${device.imei}] Procesando posición con motor híbrido`);
+      console.log(`   GPS Status: ${rawData.gpsStatus}, Sats: ${rawData.satellites}`);
+      console.log(`   WiFi APs: ${rawData.wifiAccessPoints.length}, LBS: ${rawData.cellId > 0 ? 'YES' : 'NO'}`);
+
+      // Procesar con el motor híbrido
+      const result = await this.locationEngine.processLocation(rawData);
+
+      if (!result || !result.latitude || !result.longitude) {
+        console.warn(`⚠️ [${device.imei}] Motor híbrido no pudo determinar ubicación`);
+        return;
+      }
+
+      console.log(`✅ [${device.imei}] Ubicación determinada:`);
+      console.log(`   Método: ${result.source} (${result.quality})`);
+      console.log(`   Coords: ${result.latitude.toFixed(6)}, ${result.longitude.toFixed(6)}`);
+      console.log(`   Precisión: ${result.accuracy}m`);
+
+      // Guardar en base de datos
+      await Position.create({
+        device_id: device.id,
+        latitude: result.latitude,
+        longitude: result.longitude,
+        altitude: result.altitude || 0,
+        speed: result.speed || 0,
+        direction: result.direction || 0,
+        satellites: rawData.satellites,
+        accuracy: result.accuracy,
+        location_type: result.source, // GPS, WIFI, LBS, GPS_FALLBACK
+        server_time: new Date(),
+        device_time: rawData.timestamp
+      });
+
+      // Actualizar última posición del dispositivo
+      await device.update({
+        last_latitude: result.latitude,
+        last_longitude: result.longitude,
+        last_connection: new Date()
+      });
+
+      // Notificar por WebSocket
+      if (this.websocketServer) {
+        this.websocketServer.broadcast({
+          type: 'position_update',
+          device: {
+            imei: device.imei,
+            name: device.name,
+            latitude: result.latitude,
+            longitude: result.longitude,
+            accuracy: result.accuracy,
+            location_type: result.source,
+            battery: rawData.battery,
+            timestamp: new Date()
+          }
+        });
+      }
+
+    } catch (error) {
+      console.error(`❌ [${device.imei}] Error en handlePosition:`, error);
+    }
+  }
+  async handleAlarm(device, parsed) {
+    try {
+      const alarms = parsed.alarms;
+      let alertType = 'UNKNOWN';
+      let severity = 'MEDIUM';
+      let message = 'Alarma desconocida';
+
+      if (alarms.sos) {
+        alertType = 'SOS';
+        severity = 'CRITICAL';
+        message = `🆘 Alerta SOS activada`;
+      } else if (alarms.fallDown) {
+        alertType = 'FALL_DOWN';
+        severity = 'CRITICAL';
+        message = `⚠️ Caída detectada`;
+      } else if (alarms.lowBattery) {
+        alertType = 'LOW_BATTERY';
+        severity = 'LOW';
+        message = `🔋 Batería baja`;
+      } else if (alarms.geofenceIn) {
+        alertType = 'GEOFENCE_ENTER';
+        severity = 'LOW';
+        message = `📍 Entrada a geocerca`;
+      } else if (alarms.geofenceOut) {
+        alertType = 'GEOFENCE_EXIT';
+        severity = 'MEDIUM';
+        message = `📍 Salida de geocerca`;
+      }
+
+      await Alert.create({
+        device_id: device.id,
+        alert_type: alertType,
+        severity: severity,
+        message: message,
+        latitude: parsed.latitude,
+        longitude: parsed.longitude,
+        metadata: { alarms: alarms, raw_type: parsed.alarmType },
+        status: 'NEW',
+        triggered_at: parsed.timestamp
+      });
+
+      console.log(`🚨 [${device.imei}] ALARMA ${alertType} - ${message}`);
+
+      if (this.websocketServer) {
+        this.websocketServer.broadcast({
+          type: 'alert',
+          alert: {
+            device_imei: device.imei,
+            device_name: device.name,
+            type: alertType,
+            severity: severity,
+            message: message
+          }
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error procesando alarma:', error);
+    }
+  }
+
+  async handleHealthData(device, parsed) {
+    try {
+      await HealthData.create({
+        device_id: device.id,
+        heart_rate: parsed.heartRate,
+        blood_pressure_systolic: parsed.bloodPressure.systolic,
+        blood_pressure_diastolic: parsed.bloodPressure.diastolic,
+        oxygen_level: parsed.spo2,
+        recorded_at: parsed.timestamp
+      });
+
+      console.log(`💓 [${device.imei}] Salud - HR: ${parsed.heartRate} BPM, ` +
+                  `BP: ${parsed.bloodPressure.systolic}/${parsed.bloodPressure.diastolic}, ` +
+                  `SpO2: ${parsed.spo2}%`);
+
+      await this.checkHealthAlerts(device, parsed);
+    } catch (error) {
+      console.error('❌ Error guardando datos de salud:', error);
+    }
+  }
+
+  async handleCR(device, parsed) {
+    // Algunos firmwares eco-responden CR. No se responde de vuelta.
+    console.log(`📍 [${device.imei}] CR recibido (sin respuesta). Esperando UD...`);
+  }
+
+  async checkHealthAlerts(device, healthData) {
+    const alerts = [];
+
+    if (healthData.heartRate > 120 || healthData.heartRate < 50) {
+      alerts.push({
+        type: 'HEALTH_HR_ABNORMAL',
+        message: `❤️ Frecuencia cardíaca anormal: ${healthData.heartRate} BPM`,
+        severity: 'HIGH'
+      });
+    }
+
+    if (healthData.bloodPressure.systolic > 140 || healthData.bloodPressure.diastolic > 90) {
+      alerts.push({
+        type: 'HEALTH_BP_HIGH',
+        message: `⬆️ Presión arterial alta: ${healthData.bloodPressure.systolic}/${healthData.bloodPressure.diastolic}`,
+        severity: 'MEDIUM'
+      });
+    }
+
+    if (healthData.bloodPressure.systolic < 90 || healthData.bloodPressure.diastolic < 60) {
+      alerts.push({
+        type: 'HEALTH_BP_LOW',
+        message: `⬇️ Presión arterial baja: ${healthData.bloodPressure.systolic}/${healthData.bloodPressure.diastolic}`,
+        severity: 'MEDIUM'
+      });
+    }
+
+    if (healthData.spo2 < 94) {
+      alerts.push({
+        type: 'HEALTH_SPO2_LOW',
+        message: `🫁 Oxígeno bajo: ${healthData.spo2}%`,
+        severity: 'HIGH'
+      });
+    }
+
+    for (const alert of alerts) {
+      await Alert.create({
+        device_id: device.id,
+        alert_type: alert.type,
+        severity: alert.severity,
+        message: alert.message,
+        latitude: device.last_latitude,
+        longitude: device.last_longitude,
+        status: 'NEW',
+        triggered_at: new Date()
+      });
+
+      console.log(`🚨 [${device.imei}] ${alert.message}`);
+    }
+  }
+
+  async checkGeofences(device, position) {
+    try {
+      const geofences = await sequelize.query(
+        `SELECT * FROM geofences WHERE organization_id = $1 AND is_active = true`,
+        { bind: [device.organization_id], type: QueryTypes.SELECT }
+      );
+
+      for (const fence of geofences) {
+        const coords = fence.coordinates || {};
+        const distance = this.calculateDistance(
+          position.latitude,
+          position.longitude,
+          coords.latitude,
+          coords.longitude
+        );
+
+        const isInside = distance <= (coords.radius || 500);
+
+        if (isInside && fence.alert_on_enter) {
+          await Alert.create({
+            device_id: device.id,
+            alert_type: 'GEOFENCE_ENTER',
+            severity: 'LOW',
+            message: `Entrada a geocerca: ${fence.name}`,
+            latitude: position.latitude,
+            longitude: position.longitude,
+            metadata: { geofence_id: fence.id, distance: Math.round(distance) },
+            status: 'NEW',
+            triggered_at: new Date()
+          });
+
+          console.log(`📍 [${device.imei}] Entró a geocerca "${fence.name}" (${Math.round(distance)}m del centro)`);
+        }
+
+        if (!isInside && fence.alert_on_exit) {
+          const lastPosition = await Position.findOne({
+            where: { device_id: device.id },
+            order: [['recorded_at', 'DESC']],
+            offset: 1,
+            limit: 1
+          });
+
+          if (lastPosition) {
+            const lastDistance = this.calculateDistance(
+              lastPosition.latitude,
+              lastPosition.longitude,
+              coords.latitude,
+              coords.longitude
+            );
+
+            if (lastDistance <= coords.radius) {
+              await Alert.create({
+                device_id: device.id,
+                alert_type: 'GEOFENCE_EXIT',
+                severity: 'MEDIUM',
+                message: `Salida de geocerca: ${fence.name}`,
+                latitude: position.latitude,
+                longitude: position.longitude,
+                metadata: { geofence_id: fence.id, distance: Math.round(distance) },
+                status: 'NEW',
+                triggered_at: new Date()
+              });
+
+              console.log(`📍 [${device.imei}] Salió de geocerca "${fence.name}"`);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error verificando geocercas:', error);
+    }
+  }
+
+  calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371e3;
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+  }
+
+  async handleHandshake(device, parsed) {
+    console.log(`🤝 [${device.imei}] Handshake recibido`);
+  }
+
+  /**
+   * Envía un comando al dispositivo a través de su socket TCP activo
+   * @param {string} imei - IMEI del dispositivo
+   * @param {string} command - Nombre del comando (IP, UPLOAD, CALL, etc.)
+   * @param {object} params - Parámetros del comando
+   * @returns {Promise<boolean>} true si se envió correctamente
+   */
+  async sendCommand(imei, command, params = {}) {
+    try {
+      const socket = this.connections.get(imei);
+      
+      if (!socket || socket.destroyed) {
+        console.error(`❌ [${imei}] No hay conexión activa para enviar comando`);
+        return false;
+      }
+
+      const commandMessage = ProtocolParser.generateCommand(imei, command, params);
+      const messageWithNewline = commandMessage + '\n';
+      
+      console.log(`\n📤 [COMMAND] Enviando comando al dispositivo`);
+      console.log(`   IMEI: ${imei}`);
+      console.log(`   Comando: ${command}`);
+      console.log(`   Parámetros: ${JSON.stringify(params)}`);
+      console.log(`📤 [${imei}] Mensaje: ${JSON.stringify(commandMessage)}`);
+      console.log(`📤 [${imei}] Con \\n: ${JSON.stringify(messageWithNewline)}`);
+      console.log(`📤 [${imei}] Bytes: [${Array.from(Buffer.from(messageWithNewline)).map(b => '0x' + b.toString(16).padStart(2, '0')).join(', ')}]`);
+      
+      socket.write(messageWithNewline);
+      console.log(`✅ [${imei}] ✓ Comando enviado exitosamente`);
+      
+      return true;
+    } catch (error) {
+      console.error(`❌ Error enviando comando a ${imei}:`, error.stack);
+      return false;
+    }
+  }
+
+  /**
+   * Envía comando de cambio de servidor (IP)
+   * @param {string} imei - IMEI del dispositivo
+   * @param {string} ip - Nueva IP del servidor
+   * @param {number} port - Nuevo puerto del servidor
+   */
+  async changeServerIP(imei, ip, port) {
+    console.log(`🔄 Iniciando cambio de servidor para ${imei}`);
+    console.log(`   Destino: ${ip}:${port}`);
+    
+    return this.sendCommand(imei, 'IP', { ip, port });
+  }
+
+  /**
+   * Envía comando para configurar intervalo de carga
+   * @param {string} imei - IMEI del dispositivo
+   * @param {number} interval - Intervalo en segundos (60-65535)
+   */
+  async setUploadInterval(imei, interval) {
+    if (interval < 60) interval = 60;
+    if (interval > 65535) interval = 65535;
+    
+    return this.sendCommand(imei, 'UPLOAD', { interval });
+  }
+
+  /**
+   * Envía comando para solicitar ubicación inmediata
+   * @param {string} imei - IMEI del dispositivo
+   */
+  async requestLocation(imei) {
+    return this.sendCommand(imei, 'CR', {});
+  }
+
+  /**
+   * Envía comando para reiniciar el dispositivo
+   * @param {string} imei - IMEI del dispositivo
+   */
+  async rebootDevice(imei) {
+    return this.sendCommand(imei, 'RESET', {});
+  }
+
+  /**
+   * Envía comando de búsqueda (hace sonar el dispositivo)
+   * @param {string} imei - IMEI del dispositivo
+   */
+  async findDevice(imei) {
+    return this.sendCommand(imei, 'FIND', {});
+  }
+
+  stop() {
+    if (this.server) {
+      this.server.close();
+      console.log('🛑 Servidor TCP detenido');
+    }
+  }
+}
+
+module.exports = TCPServer;
