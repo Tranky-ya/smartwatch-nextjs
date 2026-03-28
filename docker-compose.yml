@@ -63,7 +63,7 @@ services:
       LOG_LEVEL: info
     ports:
       - "7070:7070"
-      - "3003:3001"
+      - "28000:3001"
     volumes:
       - ./backend/logs:/app/logs
     networks:
@@ -76,13 +76,13 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: https://fulltranki.com
-        NEXT_PUBLIC_WS_URL: https://fulltranki.com
+        NEXT_PUBLIC_API_URL: ""
+        NEXT_PUBLIC_WS_URL: ""
     container_name: smartwatch-frontend
     depends_on:
       - backend
     ports:
-      - "3002:3000"
+      - "23000:3000"
     networks:
       - smartwatch-network
     restart: unless-stopped

@@ -8,12 +8,13 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="es">
+    <html lang="es" className="dark">
       <head>
         <script src="https://cdn.tailwindcss.com"></script>
         <script dangerouslySetInnerHTML={{
           __html: `
             tailwind.config = {
+              darkMode: 'class',
               theme: {
                 extend: {
                   colors: {

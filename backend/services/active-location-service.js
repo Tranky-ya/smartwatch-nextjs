@@ -39,7 +39,7 @@ class ActiveLocationService {
       FALLBACK_TO_DW: true,
       
       // Comandos en orden de prioridad
-      COMMAND_PRIORITY: ['CR', 'DW', 'UPLOAD']
+      COMMAND_PRIORITY: ['DW', 'CR', 'UPLOAD']
     };
     
     // Iniciar monitor de ubicaciones obsoletas

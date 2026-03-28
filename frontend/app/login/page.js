@@ -21,7 +21,8 @@ export default function Login() {
     setError("");
     setLoading(true);
     try {
-      if (!API_URL) throw new Error("API URL no configurada");
+      // Allow empty API_URL for relative calls
+      // if (!API_URL) throw new Error("API URL no configurada");
       const res = await fetch(API_URL + "/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -15,7 +15,11 @@ class ProtocolParser {
       console.log(`\n🧪 [VALIDATE] Mensaje crudo: ${JSON.stringify(message_clean)}`);
 
       if (!message_clean.startsWith('[') || !message_clean.endsWith(']')) {
-        console.warn(`⚠️ ❌ FORMATO INVÁLIDO - No tiene [ al inicio o ] al final`);
+      // Silenciar advertencia si es claramente un paquete binario AQSH
+      if (message_clean.includes('AQSH') || /[\x00-\x08]/.test(message_clean)) {
+        return null;
+      }
+      console.warn(`⚠️ ❌ FORMATO INVÁLIDO - No tiene [ al inicio o ] al final`);
         console.warn(`   Esperado: [CS*IMEI*LEN*CONTENT]`);
         console.warn(`   Recibido: ${JSON.stringify(message_clean)}`);
         return null;
@@ -87,8 +91,16 @@ class ProtocolParser {
       const payloadParts = payload.split(',');
       const commandType = (payloadParts[0] || '').toUpperCase();
 
+      let typeDesc = commandType;
+      if (['UD', 'UD2', 'AL', 'UD_LTE', 'UD_WCDMA', 'AL_LTE'].includes(commandType)) typeDesc = '📍 UBICACIÓN / POSICIÓN';
+      if (['HR', 'BP', 'BT', 'BTEMP2', 'SPO2', 'BPHRT', 'HT'].includes(commandType)) typeDesc = '🩺 SALUD / BIOMETRÍA';
+      if (['LK', 'HB'].includes(commandType)) typeDesc = '💓 HEARTBEAT (Conexión)';
+      if (['TK', 'TKQ', 'TKQ2'].includes(commandType)) typeDesc = '💬 CHAT / VOZ';
+      if (['CR', 'DW'].includes(commandType)) typeDesc = '🎯 SOLICITUD UBICACIÓN';
+      if (['FIND', 'HRTSTART'].includes(commandType)) typeDesc = '🔔 ACCIÓN DE CONTROL';
+      
       console.log(`✅ VALIDACIÓN COMPLETA`);
-      console.log(`   Protocolo: ${protocol}, IMEI: ${imei}, IDX: ${index || '-'}, HEX_LEN: ${hexLength || '-'}, Comando: ${commandType}`);
+      console.log(`   Protocolo: ${protocol}, IMEI: ${imei}, IDX: ${index || '-'}, HEX_LEN: ${hexLength || '-'}, Comando: ${commandType} (${typeDesc})`);
 
       const attachMeta = (parsed) => {
         if (!parsed || typeof parsed !== 'object') return parsed;
@@ -103,7 +115,7 @@ class ProtocolParser {
         case 'UD':
         case 'UD_WCDMA':
         case 'UD_LTE':
-          return attachMeta(this.parseUDMessage(imei, payloadParts));
+          return attachMeta(this.parseUDMessage(imei, payloadParts, commandType));
         case 'UD2':
           return attachMeta(this.parseUD2Message(imei, payloadParts));
         case 'AL':
@@ -138,14 +150,12 @@ class ProtocolParser {
         case 'HRTSTART': // 🔥 Health measurement start echo
           return { type: 'HRTSTART', imei, timestamp: new Date() };
         case 'DEVICEFUNCCOUNT':
-
-          // Mensaje de estadísticas de función del dispositivo, solo devolver tipo para ACK
-          return {
-            type: 'DEVICEFUNCCOUNT',
-            protocol,
-            imei,
-            timestamp: new Date()
-          };
+        case 'CALLLOG':
+        case 'ICCID':
+        case 'RYIMEI':
+        case 'APPCONTACTTEL':
+        case 'HB':
+          return { type: commandType, imei, timestamp: new Date() };
         default:
           console.warn(`⚠️ Tipo de comando desconocido: ${commandType}`);
           return {
@@ -198,7 +208,7 @@ class ProtocolParser {
    * Parse mensaje UD (Ubicación)
    * Formato: [CS*IMEI*LEN*UD,date,time,status,lat,N/S,lng,E/W,speed,course,altitude,satellites,signal,battery,steps,body_flips,status_hex,local_bases,...]
    */
-  static parseUDMessage(imei, payloadParts) {
+  static parseUDMessage(imei, payloadParts, commandType = 'UD') {
     try {
       const position = {
         type: 'UD',
@@ -344,7 +354,12 @@ class ProtocolParser {
       // Formato 1: Prefijados (UD,...,status_hex,GPS:TD,NET:NO(00),WiFi:...)
       // Formato 2: Posicionales (UD,...,status_hex,count,0,mcc,mnc,lac,cellid,signal,wificount,...)
       
-      const hasPrefixes = payloadParts.some(p => p && p.includes(':') && !p.match(/^\d+:\d+$/));
+      const isLteOrUd2 = commandType && (commandType.includes('LTE') || commandType === 'UD2');
+      const hasPrefixes = !isLteOrUd2 && payloadParts.some(p => 
+        p && p.includes(':') && 
+        !p.match(/^\d+:\d+$/) && 
+        !p.match(/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/) // Excluir MAC addresses
+      );
       
       if (!hasPrefixes && payloadParts.length > 22) {
         // Usar formato posicional (SmartwatchParser style)
@@ -355,11 +370,13 @@ class ProtocolParser {
         position.signal_strength = parseInt(payloadParts[23]) || 0;
         position.has_lbs = position.cell_id > 0;
         
-        const wifiCount = parseInt(payloadParts[24]) || 0;
+        const wifiCount = parseInt(payloadParts[26]) || 0;
         if (wifiCount > 0) {
           position.has_wifi = true;
           // Reconstruir wifi_raw para el engine híbrido (mac,signal,ssid,...)
-          position.wifi_raw = payloadParts.slice(26).join(',');
+          // UD_LTE: date(0), time(1), valid(2), ..., mcc(18), mnc(19), lac(20), cell(21), ..., wifi_count(26)
+          // El primer WiFi empieza en el índice 27.
+          position.wifi_raw = payloadParts.slice(27).join(',');
           position.location_type = 'WiFi';
           position.positionType = 'WiFi';
         } else if (position.has_lbs) {
@@ -413,8 +430,8 @@ class ProtocolParser {
   /**
    * Parse mensaje UD2 (Suplementos de datos de puntos ciegos)
    */
-  static parseUD2Message(imei, payloadParts) {
-    const ud = this.parseUDMessage(imei, payloadParts);
+  static parseUD2Message(imei, payloadParts, commandType = 'UD2') {
+    const ud = this.parseUDMessage(imei, payloadParts, commandType);
     ud.type = 'UD2';
     return ud;
   }
@@ -423,9 +440,9 @@ class ProtocolParser {
    * Parse mensaje AL (Alarma)
    * Formato: [CS*IMEI*LEN*AL,date,time,status,lat,N/S,lng,E/W,...]
    */
-  static parseALMessage(imei, payloadParts) {
+  static parseALMessage(imei, payloadParts, commandType = 'AL') {
     try {
-      const alarm = this.parseUDMessage(imei, payloadParts);
+      const alarm = this.parseUDMessage(imei, payloadParts, commandType);
       alarm.type = 'AL';
       return alarm;
     } catch (error) {
@@ -497,7 +514,7 @@ class ProtocolParser {
    * Formato común: [CS*IMEI*LEN*HT,hr,bp_sys,bp_dia,spo2,temp]
    */
   static parseHTMessage(imei, payloadParts) {
-    return {
+    const healthData = {
       type: 'HT',
       imei: imei,
       heartRate: parseInt(payloadParts[1]) || 0,
@@ -507,12 +524,30 @@ class ProtocolParser {
       temperature: parseFloat(payloadParts[5]) || 0,
       timestamp: new Date()
     };
+    return healthData;
   }
 
   /**
    * Parse mensajes de salud genéricos (HR, BP, BT)
    */
   static parseHealthGeneric(imei, type, payloadParts) {
+    // Inhibit empty or ACK BT messages (e.g., BT,1) from being processed as health data
+    if (type === 'BTEMP2' && payloadParts.length > 1) {
+      // Intentar leer de índice 2 (formato status,val) o índice 1 (formato val)
+      const val2 = parseFloat(payloadParts[2]);
+      const val1 = parseFloat(payloadParts[1]);
+      const val = !isNaN(val2) && val2 > 1 ? val2 : val1;
+      
+      if (isNaN(val) || val <= 1 || val > 50) return null;
+    } else if (type === 'BT' && payloadParts.length > 1) {
+      const val = parseFloat(payloadParts[1]);
+      if (isNaN(val) || val <= 1 || val > 50) return null;
+    }
+    
+    if ((type === 'BT' || type === 'BTEMP2') && payloadParts.length <= 1) {
+      return { type: 'IGNORE_ECHO', imei };
+    }
+
     const data = {
       type: type === 'BTEMP2' ? 'BT' : type,
       imei: imei,
@@ -524,7 +559,12 @@ class ProtocolParser {
       data.systolic = parseInt(payloadParts[1]) || 0;
       data.diastolic = parseInt(payloadParts[2]) || 0;
     }
-    if (type === 'BT' || type === 'BTEMP2') data.temperature = parseFloat(payloadParts[1]) || 0;
+    if (type === 'BT') data.temperature = parseFloat(payloadParts[1]) || 0;
+    if (type === 'BTEMP2') {
+      const val2 = parseFloat(payloadParts[2]);
+      const val1 = parseFloat(payloadParts[1]);
+      data.temperature = (!isNaN(val2) && val2 > 1) ? val2 : (val1 || 0);
+    }
 
     return data;
   }
@@ -766,14 +806,31 @@ class ProtocolParser {
    */
   static parseWiFiData(wifiParts) {
     const networks = [];
+    const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
 
     for (let i = 0; i < wifiParts.length; i += 3) {
-      if (wifiParts[i]) {
-        networks.push({
-          mac: wifiParts[i],
-          signal: parseInt(wifiParts[i + 1]) || 0,
-          ssid: wifiParts[i + 2] || ''
-        });
+      const chunk = wifiParts.slice(i, i + 3);
+      if (chunk.length === 0) continue;
+
+      let mac = '';
+      let signal = -70; // Default reasonable signal
+      let ssid = '';
+
+      // Identificación inteligente de campos por contenido (soporta SSID,MAC,SIGNAL y MAC,SIGNAL,SSID)
+      chunk.forEach(part => {
+        if (!part) return;
+        
+        if (macRegex.test(part)) {
+          mac = part;
+        } else if (part.match(/^-?\d+$/)) {
+          signal = parseInt(part);
+        } else {
+          ssid = part;
+        }
+      });
+
+      if (mac) {
+        networks.push({ mac, signal, ssid });
       }
     }
 
@@ -814,7 +871,10 @@ class ProtocolParser {
         // ✅ SIEMPRE responder solo "LK" → longitud 2 → 0002
         responseContent = 'LK';
         break;
+      case 'BT':
+      case 'RYIMEI':
       case 'CR':
+      case 'DW':
       case 'FIND':
       case 'HRTSTART':
       case 'ANYTIME':
@@ -825,7 +885,12 @@ class ProtocolParser {
       case 'RESET':
       case 'POWEROFF':
       case 'FACTORY':
-        return null; // Evitar bucles de eco para comandos iniciados por el servidor
+      case 'CALLLOG':
+      case 'DEVICEFUNCCOUNT':
+      case 'ICCID':
+      case 'RYIMEI':
+      case 'APPCONTACTTEL':
+        return null; // Evitar bucles de eco
       case 'UD':
       case 'UD_WCDMA':
       case 'UD_LTE':
@@ -961,7 +1026,10 @@ class ProtocolParser {
       case 'BP':
       case 'SPO2':
       case 'BT':
+      case 'BTEMP2':
+      case 'btemp2':
       case 'HT':
+      case 'ht':
       case 'hrtstart':
       case 'HEALTHAUTOSET':
         // Para comandos de salud, si no se especifica value, por defecto usamos 1 (medición inmediata)

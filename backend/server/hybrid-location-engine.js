@@ -125,16 +125,30 @@ class HybridLocationEngine {
           location = lbsLocation;
           this.stats.bySource.LBS++;
         } else {
-          // 🚨 ACEPTAR GPS CRUDO COMO ÚLTIMO RECURSO
-          this.log('warn', `[${imei}] Todas las fuentes fallaron, aceptando GPS crudo`);
-          location = {
-            latitude: rawData.latitude,
-            longitude: rawData.longitude,
-            accuracy: 500,
-            source: 'GPS_LAST_RESORT',
-            timestamp: Date.now()
-          };
-          this.stats.bySource.FALLBACK++;
+          // 🚨 ACEPTAR GPS CRUDO COMO ÚLTIMO RECURSO (Con guardia anti-cero)
+          const isZero = (parseFloat(rawData.latitude) === 0 && parseFloat(rawData.longitude) === 0);
+          
+          if (isZero && deviceState.lastGoodPoint) {
+            this.log('warn', `[${imei}] GPS crudo es 0,0 - Reusando última ubicación válida`);
+            location = { 
+                ...deviceState.lastGoodPoint, 
+                source: 'FALL_BACK_PREVIOUS',
+                timestamp: Date.now() 
+            };
+          } else if (isZero) {
+            this.log('error', `[${imei}] GPS crudo es 0,0 y no hay historial - Ignorando punto`);
+            return null; // Forzará al TcpServer a ignorar este reporte
+          } else {
+            this.log('warn', `[${imei}] Todas las fuentes fallaron, aceptando GPS crudo`);
+            location = {
+              latitude: rawData.latitude,
+              longitude: rawData.longitude,
+              accuracy: 500,
+              source: 'GPS_LAST_RESORT',
+              timestamp: Date.now()
+            };
+            this.stats.bySource.FALLBACK++;
+          }
         }
       }
 

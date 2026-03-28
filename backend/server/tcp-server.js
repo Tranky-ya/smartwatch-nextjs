@@ -133,6 +133,24 @@ class TCPServer extends EventEmitter {
 
         buffer += rawString;
 
+        // 🛡️ Limpieza de paquetes binarios AQSH (AnQiShenHua)
+        // Estos paquetes no usan corchetes y ensucian el buffer de texto.
+        if (buffer.includes('AQSH')) {
+          const aqshIdx = buffer.indexOf('AQSH');
+          // Si el paquete está al inicio o precedido por un byte nulo/basura
+          if (aqshIdx < 5) { 
+            console.log(`[BINARY] [${clientInfo}] Detectado preámbulo AQSH - Limpiando buffer binario`);
+            // Buscamos si hay un '[' después para no borrar mensajes válidos
+            const nextFrame = buffer.indexOf('[', aqshIdx);
+            if (nextFrame !== -1) {
+              buffer = buffer.slice(nextFrame);
+            } else {
+              // Si no hay frame válido cerca, esperar o limpiar si el buffer es muy grande
+              if (buffer.length > 500) buffer = ''; 
+            }
+          }
+        }
+
         while (true) {
           const start = buffer.indexOf('[');
           if (start === -1) break;
@@ -212,14 +230,25 @@ class TCPServer extends EventEmitter {
 
       const parsed = ProtocolParser.parse(message);
 
-      if (!parsed) {
-        console.warn(`[PARSE-FAIL] Mensaje NO parseado/rechazado por validacion`);
-        console.warn(`   Mensaje original: ${JSON.stringify(message)}`);
+      if (!parsed || parsed.type === 'IGNORE_ECHO') {
+        if (!parsed) {
+          console.warn(`[PARSE-FAIL] Mensaje NO parseado/rechazado por validacion`);
+          console.warn(`   Mensaje original: ${JSON.stringify(message)}`);
+        }
         return currentDevice;
       }
 
+      let typeDesc = parsed.type;
+      if (['UD', 'UD2', 'AL', 'UD_LTE', 'UD_WCDMA', 'AL_LTE'].includes(parsed.type)) typeDesc = '📍 UBICACIÓN';
+      if (['HR', 'BP', 'BT', 'BTEMP2', 'SPO2', 'BPHRT', 'HT'].includes(parsed.type)) typeDesc = '🩺 SALUD / BIOMETRÍA';
+      if (['LK', 'HB'].includes(parsed.type)) typeDesc = '💓 HEARTBEAT (Conexión)';
+      if (['TK', 'TKQ', 'TKQ2'].includes(parsed.type)) typeDesc = '💬 CHAT / VOZ';
+      if (['CR', 'DW'].includes(parsed.type)) typeDesc = '🎯 SOLICITUD UBICACIÓN';
+      if (['FIND', 'HRTSTART'].includes(parsed.type)) typeDesc = '🔔 ACCIÓN DE CONTROL';
+      if (['ANYTIME', 'DEVICEFUNCCOUNT', 'CALLLOG', 'ICCID', 'RYIMEI', 'APPCONTACTTEL'].includes(parsed.type)) typeDesc = 'ℹ️ INFORMACIÓN TÉCNICA';
+
       console.log(`[PARSE-OK] Mensaje parseado exitosamente`);
-      console.log(`   Tipo: ${parsed.type}`);
+      console.log(`   Tipo: ${parsed.type} (${typeDesc})`);
       console.log(`   IMEI: ${parsed.imei}`);
 
       if (!String(parsed.imei || '').match(/^\d{10}$/)) {
@@ -330,7 +359,7 @@ class TCPServer extends EventEmitter {
         is_online: true
       });
 
-      console.log(`[HEARTBEAT] [${device.imei}] Heartbeat - Bateria: ${parsed.battery}%, Pasos hoy: ${stepsToday}, Total: ${parsed.steps}`);
+      console.log(`[HEARTBEAT] [${device.imei}] 💓 Heartbeat - Bateria: ${parsed.battery}%, Pasos: ${stepsToday} hoy / ${parsed.steps} total`);
 
       if (parsed.battery < 20) {
         await Alert.create({
@@ -349,7 +378,7 @@ class TCPServer extends EventEmitter {
 
   async handlePosition(device, parsed) {
     try {
-      console.log(`[POSITION] [${device.imei}] Posicion recibida`);
+      console.log(`[POSITION] [${device.imei}] 📍 Posicion recibida`);
       console.log(`   Lat: ${parsed.latitude}, Lng: ${parsed.longitude}`);
       console.log(`   Bateria: ${parsed.battery}%`);
       console.log(`   Tipo original: ${parsed.location_type || parsed.positionType || 'UNKNOWN'}`);
@@ -399,6 +428,13 @@ class TCPServer extends EventEmitter {
       const finalLng = bestLocation.location.longitude;
       const finalSource = bestLocation.source;
       const finalAccuracy = bestLocation.accuracy;
+
+      // 🛑 ZERO COORDINATE GUARD (Build v3.0.A)
+      // Si el motor híbrido falló y el prioritizador devolvió 0,0, no ensuciar la base de datos.
+      if (finalLat === 0 && finalLng === 0) {
+        console.warn(`[WARN] [${device.imei}] Posición RECHAZADA (0,0 detected) - Manteniendo última ubicación válida en el mapa`);
+        return;
+      }
 
       await Position.create({
         device_id: device.id,
@@ -529,17 +565,30 @@ class TCPServer extends EventEmitter {
         temperature: parsed.temperature || 0
       };
 
-      await HealthData.create({
-        device_id: device.id,
-        heart_rate: healthData.heartRate,
-        systolic_pressure: healthData.bloodPressure.systolic,
-        diastolic_pressure: healthData.bloodPressure.diastolic,
-        spo2: healthData.spo2,
-        temperature: healthData.temperature,
-        measurement_time: new Date()
-      });
+      // Solo guardar si hay algún dato real (> 0 y no es un ACK de temperatura "1")
+      const hasRealData = healthData.heartRate > 0 || 
+                         healthData.spo2 > 0 || 
+                         (healthData.temperature > 1 && healthData.temperature < 50) || 
+                         healthData.bloodPressure.systolic > 0;
 
-      console.log(`[HEALTH] [${device.imei}] Datos de salud guardados`);
+      if (hasRealData) {
+        console.log(`[HEALTH] [${device.imei}] 🩺 Datos de Salud guardados: ` + 
+          `FC: ${healthData.heartRate}, PA: ${healthData.bloodPressure.systolic}/${healthData.bloodPressure.diastolic}, ` + 
+          `SpO2: ${healthData.spo2}, Temp: ${healthData.temperature}°C`);
+        
+        await HealthData.create({
+          device_id: device.id,
+          heart_rate: healthData.heartRate,
+          systolic_pressure: healthData.bloodPressure.systolic,
+          diastolic_pressure: healthData.bloodPressure.diastolic,
+          spo2: healthData.spo2,
+          temperature: healthData.temperature,
+          measurement_time: new Date()
+        });
+        console.log(`[HEALTH] [${device.imei}] Datos de salud guardados`);
+      } else {
+        console.log(`[HEALTH] [${device.imei}] Ignorando eco de salud (datos en cero)`);
+      }
       console.log(`   FC: ${healthData.heartRate} BPM`);
       console.log(`   PA: ${healthData.bloodPressure.systolic}/${healthData.bloodPressure.diastolic}`);
       console.log(`   SpO2: ${healthData.spo2}%`);

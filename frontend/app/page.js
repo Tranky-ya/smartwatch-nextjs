@@ -2,36 +2,137 @@
 import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowRight, Shield, Heart, Clock, Activity, CheckCircle, Smartphone, Sun, Moon } from 'lucide-react';
+import { ArrowRight, Shield, Heart, Clock, Activity, CheckCircle, Smartphone, Globe } from 'lucide-react';
+
+const TRANSLATIONS = {
+    es: {
+        nav: {
+            privacy: "Privacidad",
+            login: "Iniciar Sesión",
+        },
+        hero: {
+            title: <>¿Y SI PUEDES <br /> GENERAR <span className="text-[#202d35] dark:text-[#ccff00]">TRANQUILIDAD</span> <br /> Y <span className="text-[#202d35] dark:text-[#ccff00]">SEGURIDAD</span> <br /> JUSTO CUANDO <br /> MÁS SE NECESITA?</>,
+            button: "Ingresar al Sistema",
+        },
+        problem: {
+            title1: <>Aunque tengan la tecnología, en los momentos claves <span className="text-[#202d35] dark:text-[#ccff00]">no siempre saben o pueden usarla.</span></>,
+            title2: <><span className="text-[#202d35] dark:text-[#ccff00]">Ahí es cuando más necesitan apoyo... porque cada minuto cuenta.</span></>,
+        },
+        ecosystem: {
+            title: <>CONTAR CON UN <span className="text-[#202d35] dark:text-[#ccff00]">ECOSISTEMA</span> QUE ALERTE A TUS CONTACTOS ES CLAVE</>,
+            features: [
+                { title: "ACTUAR RÁPIDO", desc: "Notifica de inmediato en situaciones críticas." },
+                { title: "VARIOS MECANISMOS", desc: "Funciona cuando otros medios no están a la mano." },
+                { title: "SENCILLO", desc: "Ideal para personas vulnerables, fácil de usar bajo presión." },
+                { title: "TRANQUILIDAD", desc: "Asegura apoyo y paz mental para ti y los tuyos." }
+            ]
+        },
+        help: {
+            title: <>COMO TE VAMOS A <span className="text-transparent bg-clip-text bg-gradient-to-r from-gray-600 to-black dark:from-white dark:to-gray-500">AYUDAR</span></>,
+            accompany: { title: "ACOMPAÑARTE", subtitle: "En el momento preciso", desc: "Al momento de necesitarlo, podrás generar la alerta con un solo toque." },
+            update: { title: "ACTUALIZARTE", subtitle: "En todo momento", desc: "Monitorea temperatura y valida la atención de alarmas." },
+        },
+        steps: {
+            items: [
+                "Descargas el App.",
+                "Obtienes el brazalete.",
+                "Ingresas la información básica.",
+                "Escoges el plan que más te convenga.",
+                "Empiezas a estar protegido."
+            ],
+            noti: "Notificación de alerta",
+            app: "App interface"
+        },
+        plans: {
+            title: "DARTE LAS OPCIONES ADECUADAS",
+            subtitle: "Dependiendo de tus necesidades, brindarte los planes de inversión:",
+            items: [
+                { title: "EASY", desc: "Incluye dispositivo + app. Envía alertas a un contacto de confianza." },
+                { title: "SOLID", desc: "Además de EASY, llamadas y si tu contacto no responde, nuestro call center con IA te ayuda y canaliza lo necesario." },
+                { title: "BOOST", desc: "Incluye SOLID + Asistencia medica remota y envío de personal de asistencia medica a tu domicilio según la urgencia presentada." },
+                { title: "ULTRA", desc: "Todo lo anterior + IA + ambulancia, acompañamiento psicológico y atención médica en casa y/o telefónica." }
+            ]
+        },
+        footer: {
+            rights: "© 2026 FullTranki es un producto de MEGA DEEP ANALYTICS SAS. Todos los derechos reservados.",
+            privacy: "Política de Privacidad",
+            terms: "Términos de servicio"
+        }
+    },
+    en: {
+        nav: {
+            privacy: "Privacy",
+            login: "Login",
+        },
+        hero: {
+            title: <>WHAT IF YOU <br /> COULD GENERATE <span className="text-[#202d35] dark:text-[#ccff00]">PEACE OF MIND</span> <br /> AND <span className="text-[#202d35] dark:text-[#ccff00]">SECURITY</span> <br /> JUST WHEN IT'S <br /> NEEDED MOST?</>,
+            button: "Enter System",
+        },
+        problem: {
+            title1: <>Even if they have the technology, at key moments <span className="text-[#202d35] dark:text-[#ccff00]">they don't always know or can't use it.</span></>,
+            title2: <><span className="text-[#202d35] dark:text-[#ccff00]">That's when they need support most... because every minute counts.</span></>,
+        },
+        ecosystem: {
+            title: <>HAVING AN <span className="text-[#202d35] dark:text-[#ccff00]">ECOSYSTEM</span> THAT ALERTS YOUR CONTACTS IS KEY</>,
+            features: [
+                { title: "ACT FAST", desc: "Notifies immediately in critical situations." },
+                { title: "MULTIPLE MECHANISMS", desc: "Works when other means are not at hand." },
+                { title: "SIMPLE", desc: "Ideal for vulnerable people, easy to use under pressure." },
+                { title: "PEACE OF MIND", desc: "Ensures support and peace of mind for you and yours." }
+            ]
+        },
+        help: {
+            title: <>HOW WE ARE GOING TO <span className="text-transparent bg-clip-text bg-gradient-to-r from-gray-600 to-black dark:from-white dark:to-gray-500">HELP YOU</span></>,
+            accompany: { title: "ACCOMPANY YOU", subtitle: "At the precise moment", desc: "When you need it, you can generate the alert with a single touch." },
+            update: { title: "UPDATE YOU", subtitle: "At all times", desc: "Monitor temperature and validate alarm attention." },
+        },
+        steps: {
+            items: [
+                "Download the App.",
+                "Get the bracelet.",
+                "Enter basic information.",
+                "Choose the plan that suits you best.",
+                "Start being protected."
+            ],
+            noti: "Alert notification",
+            app: "App interface"
+        },
+        plans: {
+            title: "GIVING YOU THE RIGHT OPTIONS",
+            subtitle: "Depending on your needs, providing you with investment plans:",
+            items: [
+                { title: "EASY", desc: "Includes device + app. Sends alerts to a trusted contact." },
+                { title: "SOLID", desc: "In addition to EASY, calls and if your contact does not respond, our AI call center helps you and channels what is necessary." },
+                { title: "BOOST", desc: "Includes SOLID + Remote medical assistance and dispatch of medical assistance personnel to your home according to the urgency presented." },
+                { title: "ULTRA", desc: "All of the above + AI + ambulance, psychological accompaniment and home and/or telephone medical care." }
+            ]
+        },
+        footer: {
+            rights: "© 2026 FullTranki is a product of MEGA DEEP ANALYTICS SAS. All rights reserved.",
+            privacy: "Privacy Policy",
+            terms: "Terms of Service"
+        }
+    }
+};
 
 export default function LandingPage() {
-    const [isDark, setIsDark] = useState(true);
+    const [lang, setLang] = useState('es');
+    const t = TRANSLATIONS[lang];
 
     useEffect(() => {
-        // Detect current theme
-        const checkTheme = () => {
-            setIsDark(document.documentElement.classList.contains('dark'));
-        };
-
-        checkTheme();
-
-        // Listen for changes (e.g., system theme changes)
-        const observer = new MutationObserver(checkTheme);
-        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-
-        return () => observer.disconnect();
+        // Load language preference
+        const savedLang = localStorage.getItem('lang');
+        if (savedLang && (savedLang === 'es' || savedLang === 'en')) {
+            setLang(savedLang);
+        }
     }, []);
 
-    const toggleTheme = () => {
-        const newTheme = isDark ? 'light' : 'dark';
-        if (newTheme === 'dark') {
-            document.documentElement.classList.add('dark');
-            localStorage.setItem('theme', 'dark');
-        } else {
-            document.documentElement.classList.remove('dark');
-            localStorage.setItem('theme', 'light');
-        }
-        setIsDark(!isDark);
+    const isDark = true;
+
+    const toggleLang = () => {
+        const newLang = lang === 'es' ? 'en' : 'es';
+        setLang(newLang);
+        localStorage.setItem('lang', newLang);
     };
 
     return (
@@ -51,28 +152,28 @@ export default function LandingPage() {
                             />
                         </Link>
                     </div>
-                    <div className="flex items-center gap-6">
-                        {/* Theme Toggle Button */}
+                    <div className="flex items-center gap-4 md:gap-6">
+                        {/* Language Toggle */}
                         <button
-                            onClick={toggleTheme}
-                            className="p-2.5 rounded-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 hover:border-[#ccff00]/50 transition-all group"
-                            aria-label="Toggle theme"
+                            onClick={toggleLang}
+                            className="flex items-center gap-2 p-2 rounded-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 hover:border-[#ccff00]/50 transition-all group"
+                            aria-label="Toggle language"
                         >
-                            {isDark ? (
-                                <Sun className="w-5 h-5 text-gray-400 group-hover:text-[#ccff00] transition-colors" />
-                            ) : (
-                                <Moon className="w-5 h-5 text-gray-600 group-hover:text-black transition-colors" />
-                            )}
+                            <Globe className="w-4 h-4 text-gray-400 group-hover:text-[#ccff00] transition-colors" />
+                            <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:block">
+                                {lang === 'es' ? 'EN' : 'ES'}
+                            </span>
                         </button>
 
+
                         <Link href="/privacy-policy" className="text-sm text-gray-500 dark:text-gray-400 hover:text-black dark:hover:text-white transition-colors hidden md:block">
-                            Privacidad
+                            {t.nav.privacy}
                         </Link>
                         <Link
                             href="/login"
                             className="px-6 py-2.5 bg-[#ccff00] text-black font-bold rounded-full hover:bg-[#bbe600] transition-all transform hover:scale-105 shadow-[0_0_20px_rgba(204,255,0,0.3)]"
                         >
-                            Iniciar Sesión
+                            {t.nav.login}
                         </Link>
                     </div>
                 </div>
@@ -96,18 +197,14 @@ export default function LandingPage() {
                 <div className="container mx-auto px-6 pb-12 relative z-10 min-h-full flex flex-col justify-center pt-28 md:pt-20">
                     <div className="max-w-3xl text-center md:text-left">
                         <h1 className="text-4xl md:text-7xl font-bold leading-tight md:leading-none mb-6 tracking-tight uppercase">
-                            ¿Y SI PUEDES <br />
-                            GENERAR <span className="text-[#202d35] dark:text-[#ccff00]">TRANQUILIDAD</span> <br />
-                            Y <span className="text-[#202d35] dark:text-[#ccff00]">SEGURIDAD</span> <br />
-                            JUSTO CUANDO <br />
-                            MÁS SE NECESITA?
+                            {t.hero.title}
                         </h1>
                         <div className="flex flex-col sm:flex-row gap-4 justify-center md:justify-start">
                             <Link
                                 href="/login"
                                 className="group px-8 py-4 bg-[#ccff00] text-black font-bold rounded-full hover:bg-[#bbe600] transition-all flex items-center justify-center gap-2 shadow-[0_0_30px_rgba(204,255,0,0.4)] hover:scale-105 active:scale-95"
                             >
-                                Ingresar al Sistema
+                                {t.hero.button}
                                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                             </Link>
                         </div>
@@ -129,11 +226,11 @@ export default function LandingPage() {
                         </div>
                         <div>
                             <h2 className="text-[#202d35] dark:text-white text-3xl md:text-5xl font-bold mb-8 leading-tight">
-                                Aunque tengan la tecnología, en los momentos claves <span className="text-[#202d35] dark:text-[#ccff00]">no siempre saben o pueden usarla.</span>
+                                {t.problem.title1}
                             </h2>
                             <div className="space-y-6 text-lg">
                                 <h2 className="text-[#202d35] dark:text-white text-3xl md:text-5xl font-bold mb-8 leading-tight">
-                                    <span className="text-[#202d35] dark:text-[#ccff00]">Ahí es cuando más necesitan apoyo... porque cada minuto cuenta.</span>
+                                    {t.problem.title2}
                                 </h2>
                             </div>
                         </div>
@@ -146,31 +243,19 @@ export default function LandingPage() {
                 <div className="container mx-auto px-6">
                     <div className="text-center mb-20">
                         <h2 className="text-3xl md:text-5xl font-bold mb-6 leading-tight">
-                            CONTAR CON UN <span className="text-[#202d35] dark:text-[#ccff00]">ECOSISTEMA</span> QUE ALERTE A TUS CONTACTOS ES CLAVE
+                            {t.ecosystem.title}
                         </h2>
                     </div>
 
                     <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-                        <FeatureCard
-                            icon={<Activity />}
-                            title="ACTUAR RÁPIDO"
-                            desc="Notifica de inmediato en situaciones críticas."
-                        />
-                        <FeatureCard
-                            icon={<Smartphone />}
-                            title="VARIOS MECANISMOS"
-                            desc="Funciona cuando otros medios no están a la mano."
-                        />
-                        <FeatureCard
-                            icon={<CheckCircle />}
-                            title="SENCILLO"
-                            desc="Ideal para personas vulnerables, fácil de usar bajo presión."
-                        />
-                        <FeatureCard
-                            icon={<Heart />}
-                            title="TRANQUILIDAD"
-                            desc="Asegura apoyo y paz mental para ti y los tuyos."
-                        />
+                        {t.ecosystem.features.map((f, i) => (
+                            <FeatureCard
+                                key={i}
+                                icon={[<Activity />, <Smartphone />, <CheckCircle />, <Heart />][i]}
+                                title={f.title}
+                                desc={f.desc}
+                            />
+                        ))}
                     </div>
                 </div>
             </section>
@@ -179,14 +264,13 @@ export default function LandingPage() {
             <section className="bg-white dark:bg-[#0a0a0a] py-24 transition-colors duration-300">
                 <div className="container mx-auto px-6">
                     <div className="text-center mb-8">
-                        <h2 className="text-3xl md:text-5xl font-black uppercase tracking-tighter drop-shadow-xl text-black dark:text-white">
-                            COMO TE VAMOS A <span className="text-transparent bg-clip-text bg-gradient-to-r from-gray-600 to-black dark:from-white dark:to-gray-500">AYUDAR</span>
+                        <h2 className="text-3xl md:text-5xl font-black uppercase tracking-tighter drop-shadow-xl text-black dark:text-white text-center">
+                            {t.help.title}
                         </h2>
                     </div>
 
-                    {/* Desktop/Tablet Layout: Unified Aspect Ratio Container */}
+                    {/* Desktop/Tablet Layout */}
                     <div className="relative w-full max-w-[1600px] mx-auto aspect-[21/9] lg:aspect-[16/9] hidden md:block group">
-                        {/* Background Image Container */}
                         <div className="absolute inset-0 rounded-3xl overflow-hidden border border-black/5 dark:border-white/10 shadow-2xl z-0">
                             <Image
                                 src="/images/help.png"
@@ -198,43 +282,38 @@ export default function LandingPage() {
                             <div className="absolute inset-0 bg-gradient-to-t from-white/40 via-transparent to-transparent dark:from-black/60 dark:to-transparent"></div>
                         </div>
 
-                        {/* Card 1: Acompañarte - Precise Alignment */}
+                        {/* Card 1 */}
                         <div className="absolute top-[10%] left-[2%] lg:left-[5%] w-[280px] h-[180px] p-6 rounded-2xl bg-white/90 dark:bg-black/60 backdrop-blur-md border border-black/10 dark:border-white/10 hover:border-[#202d35]/50 dark:hover:border-[#ccff00]/50 transition-all z-10 shadow-xl">
-                            <h3 className="text-xl font-bold mb-2 group-hover:text-[#202d35] dark:group-hover:text-[#ccff00] transition-colors">ACOMPAÑARTE</h3>
-                            <p className="text-[10px] font-bold tracking-widest text-[#202d35] dark:text-[#ccff00] mb-3 uppercase">En el momento preciso</p>
+                            <h3 className="text-xl font-bold mb-2 group-hover:text-[#202d35] dark:group-hover:text-[#ccff00] transition-colors">{t.help.accompany.title}</h3>
+                            <p className="text-[10px] font-bold tracking-widest text-[#202d35] dark:text-[#ccff00] mb-3 uppercase">{t.help.accompany.subtitle}</p>
                             <p className="text-gray-700 dark:text-gray-200 text-sm leading-relaxed">
-                                Al momento de necesitarlo, podrás generar la alerta con un solo toque.
+                                {t.help.accompany.desc}
                             </p>
                         </div>
 
-                        {/* Card 2: Actualizarte - Precise Alignment */}
+                        {/* Card 2 */}
                         <div className="absolute bottom-[10%] right-[2%] lg:right-[5%] w-[280px] h-[180px] p-6 rounded-2xl bg-white/90 dark:bg-black/60 backdrop-blur-md border border-black/10 dark:border-white/10 hover:border-[#202d35]/50 dark:hover:border-[#ccff00]/50 transition-all z-10 text-right shadow-xl">
-                            <h3 className="text-xl font-bold mb-2 group-hover:text-[#202d35] dark:group-hover:text-[#ccff00] transition-colors">ACTUALIZARTE</h3>
-                            <p className="text-[10px] font-bold tracking-widest text-[#202d35] dark:text-[#ccff00] mb-3 uppercase">En todo momento</p>
+                            <h3 className="text-xl font-bold mb-2 group-hover:text-[#202d35] dark:group-hover:text-[#ccff00] transition-colors">{t.help.update.title}</h3>
+                            <p className="text-[10px] font-bold tracking-widest text-[#202d35] dark:text-[#ccff00] mb-3 uppercase">{t.help.update.subtitle}</p>
                             <p className="text-gray-700 dark:text-gray-200 text-sm leading-relaxed">
-                                Monitorea temperatura y valida la atención de alarmas.
+                                {t.help.update.desc}
                             </p>
                         </div>
                     </div>
 
-                    {/* Mobile View (Stacked) */}
+                    {/* Mobile View */}
                     <div className="flex flex-col gap-8 md:hidden">
                         <div className="relative w-full aspect-[4/3] rounded-2xl overflow-hidden border border-black/10 dark:border-white/10">
-                            <Image
-                                src="/images/help.png"
-                                alt="Ayuda"
-                                fill
-                                className="object-cover"
-                            />
+                            <Image src="/images/help.png" alt="Ayuda" fill className="object-cover" />
                         </div>
-                        <div className="grid gap-4">
-                            <div className="p-6 rounded-2xl bg-gray-50 dark:bg-black/60 backdrop-blur-sm border border-black/5 dark:border-white/10 text-center">
-                                <h3 className="text-xl font-bold mb-2 text-[#ccff00]">ACOMPAÑARTE</h3>
-                                <p className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed">Al momento de necesitarlo, podrás generar la alerta con un solo toque.</p>
+                        <div className="grid gap-4 text-center">
+                            <div className="p-6 rounded-2xl bg-gray-50 dark:bg-black/60 backdrop-blur-sm border border-black/5 dark:border-white/10">
+                                <h3 className="text-xl font-bold mb-2 text-[#202d35] dark:text-[#ccff00]">{t.help.accompany.title}</h3>
+                                <p className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed">{t.help.accompany.desc}</p>
                             </div>
-                            <div className="p-6 rounded-2xl bg-gray-50 dark:bg-black/60 backdrop-blur-sm border border-black/5 dark:border-white/10 text-center">
-                                <h3 className="text-xl font-bold mb-2 text-[#ccff00]">ACTUALIZARTE</h3>
-                                <p className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed">Monitorea temperatura, movimientos y valida la atención de alarmas.</p>
+                            <div className="p-6 rounded-2xl bg-gray-50 dark:bg-black/60 backdrop-blur-sm border border-black/5 dark:border-white/10">
+                                <h3 className="text-xl font-bold mb-2 text-[#202d35] dark:text-[#ccff00]">{t.help.update.title}</h3>
+                                <p className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed">{t.help.update.desc}</p>
                             </div>
                         </div>
                     </div>
@@ -245,35 +324,22 @@ export default function LandingPage() {
             <section className="bg-gray-50 dark:bg-[#0a0a0a] py-24 transition-colors duration-300">
                 <div className="container mx-auto px-6">
                     <div className="max-w-[1600px] mx-auto bg-white dark:bg-[#1a1a1a] rounded-[2rem] p-8 md:p-12 border border-black/5 dark:border-white/5 relative overflow-hidden shadow-xl dark:shadow-none">
-                        {/* Decorative Glow */}
                         <div className="absolute top-0 right-0 w-64 h-64 bg-[#ccff00]/10 blur-[80px] rounded-full pointer-events-none"></div>
 
                         <div className="grid md:grid-cols-[0.8fr_1.2fr] gap-8 items-center relative z-10">
                             <div>
                                 <div className="space-y-6">
-                                    <Step number="1" text="Descargas el App." />
-                                    <Step number="2" text="Obtienes el brazalete." />
-                                    <Step number="3" text="Ingresas la información básica." />
-                                    <Step number="4" text="Escoges el plan que más te convenga." />
-                                    <Step number="5" text="Empiezas a estar protegido." />
+                                    {t.steps.items.map((step, i) => (
+                                        <Step key={i} number={i + 1} text={step} />
+                                    ))}
                                 </div>
                             </div>
                             <div className="flex flex-col md:flex-row gap-4 h-[400px] md:h-[350px]">
                                 <div className="relative flex-[1.5] bg-white dark:bg-black rounded-3xl border border-black/5 dark:border-white/10 flex items-center justify-center p-2 overflow-hidden shadow-lg">
-                                    <Image
-                                        src="/images/noti.png"
-                                        alt="Notificación de alerta"
-                                        fill
-                                        className="object-contain p-4"
-                                    />
+                                    <Image src="/images/noti.png" alt={t.steps.noti} fill className="object-contain p-4" />
                                 </div>
                                 <div className="relative flex-1 bg-white dark:bg-black rounded-3xl border border-black/5 dark:border-white/10 flex items-center justify-center p-2 overflow-hidden shadow-lg">
-                                    <Image
-                                        src="/images/app.png"
-                                        alt="App interface"
-                                        fill
-                                        className="object-contain p-4"
-                                    />
+                                    <Image src="/images/app.png" alt={t.steps.app} fill className="object-contain p-4" />
                                 </div>
                             </div>
                         </div>
@@ -284,37 +350,21 @@ export default function LandingPage() {
             {/* Investment Plans Section */}
             <section className="bg-white dark:bg-black py-24 relative overflow-hidden transition-colors duration-300">
                 <div className="container mx-auto px-6">
-
                     <div className="max-w-4xl mb-16">
                         <h3 className="text-2xl md:text-3xl font-bold text-[#202d35] dark:text-[#ccff00] mb-4 uppercase tracking-tighter">
-                            DARTE LAS OPCIONES ADECUADAS
+                            {t.plans.title}
                         </h3>
                         <p className="text-gray-600 dark:text-gray-400 text-lg">
-                            Dependiendo de tus necesidades, brindarte los planes de inversión:
+                            {t.plans.subtitle}
                         </p>
                     </div>
 
-                    {/* Pricing Grid */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 relative z-10">
-                        <PricingCard
-                            title="EASY"
-                            desc="Incluye dispositivo + app. Envía alertas a un contacto de confianza."
-                        />
-                        <PricingCard
-                            title="SOLID"
-                            desc="Además de EASY, llamadas y si tu contacto no responde, nuestro call center con IA te ayuda y canaliza lo necesario."
-                        />
-                        <PricingCard
-                            title="BOOST"
-                            desc="Incluye SOLID + Asistencia medica remota y envío de personal de asistencia medica a tu domicilio según la urgencia presentada."
-                        />
-                        <PricingCard
-                            title="ULTRA"
-                            desc="Todo lo anterior + IA + ambulancia, acompañamiento psicológico y atención médica en casa y/o telefónica."
-                        />
+                        {t.plans.items.map((p, i) => (
+                            <PricingCard key={i} title={p.title} desc={p.desc} />
+                        ))}
                     </div>
 
-                    {/* Section Logo */}
                     <div className="flex justify-end mt-16">
                         <Image
                             src={isDark ? "/images/logo_verde.png" : "/images/LOGO-ligth.png"}
@@ -331,14 +381,14 @@ export default function LandingPage() {
             <footer className="py-12 border-t border-black/5 dark:border-white/10 bg-gray-50 dark:bg-[#050505] transition-colors duration-300">
                 <div className="container mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
                     <div className="text-gray-400 dark:text-gray-500 text-sm">
-                        © 2026 FullTranki. Todos los derechos reservados.
+                        {t.footer.rights}
                     </div>
                     <div className="flex gap-8">
                         <Link href="/privacy-policy" className="text-gray-400 dark:text-gray-500 hover:text-[#ccff00] transition-colors text-sm">
-                            Política de Privacidad
+                            {t.footer.privacy}
                         </Link>
                         <a href="#" className="text-gray-400 dark:text-gray-500 hover:text-[#ccff00] transition-colors text-sm">
-                            Términos de servicio
+                            {t.footer.terms}
                         </a>
                     </div>
                 </div>

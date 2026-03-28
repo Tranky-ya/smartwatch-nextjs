@@ -37,6 +37,7 @@ const ICONS = {
 
 export default function MapPage() {
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+
   const router = useRouter();
 
   // ─── State ────────────────────────────────────────────────────────────────
@@ -57,6 +58,7 @@ export default function MapPage() {
   const [healthReq, setHealthReq] = useState({ loading: false, status: "" });
   const [healthAutoReq, setHealthAutoReq] = useState({ loading: false, status: "" });
   const [findReq, setFindReq] = useState({ loading: false, status: "" });
+  const [tempReq, setTempReq] = useState({ loading: false, status: "" });
   
   // Safety states
   const [fallSens, setFallSens] = useState(3);
@@ -159,10 +161,12 @@ export default function MapPage() {
       const data = await r.json();
       if (!data.length) { setHealthData(null); setHealthHistory({ intraday: [], daily: [], monthly: [] }); return; }
 
-      const merged = { spo2: 0, heart_rate: 0, systolic_pressure: 0, diastolic_pressure: 0, measurement_time: data[0].measurement_time };
+      // 1. Current Health Status (Merged latest)
+      const merged = { spo2: 0, heart_rate: 0, systolic_pressure: 0, diastolic_pressure: 0, temperature: 0, measurement_time: data[0].measurement_time };
       for (const row of data) {
         if (!merged.spo2 && row.spo2 > 0) merged.spo2 = Number(row.spo2);
         if (!merged.heart_rate && row.heart_rate > 0) merged.heart_rate = Number(row.heart_rate);
+        if (!merged.temperature && row.temperature > 0) merged.temperature = Number(row.temperature);
         if (!merged.systolic_pressure && row.systolic_pressure > 0) { 
           merged.systolic_pressure = Number(row.systolic_pressure); 
           merged.diastolic_pressure = Number(row.diastolic_pressure); 
@@ -172,47 +176,72 @@ export default function MapPage() {
       
       const chrono = [...data].reverse();
 
-      // Intraday
-      const intraday = chrono.slice(-40).map(d => ({
-        label: new Date(d.measurement_time).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }),
-        bpm: d.heart_rate ? Number(d.heart_rate) : null, 
-        sys: d.systolic_pressure ? Number(d.systolic_pressure) : null, 
-        dia: d.diastolic_pressure ? Number(d.diastolic_pressure) : null,
-        spo2: d.spo2 ? Number(d.spo2) : null
-      })).filter(d => (d.bpm && d.bpm > 0) || (d.sys && d.sys > 0) || (d.spo2 && d.spo2 > 0));
+      // 2. Intraday - Group by minute to avoid fragmented Pulse/Oxygen dots
+      const intradayMap = {};
+      chrono.forEach(d => {
+        // Use a 1-minute bucket for grouping
+        const date = new Date(d.measurement_time);
+        const minuteKey = date.toISOString().substring(0, 16); // "YYYY-MM-DDTHH:mm"
+        
+        if (!intradayMap[minuteKey]) {
+          intradayMap[minuteKey] = {
+            timestamp: date,
+            label: date.toLocaleTimeString("es-CO", { timeZone: "America/Bogota", hour: "2-digit", minute: "2-digit", hour12: true }),
+            bpm: null, sys: null, dia: null, spo2: null, temp: null
+          };
+        }
+        
+        if (d.heart_rate > 0) intradayMap[minuteKey].bpm = Number(d.heart_rate);
+        if (d.systolic_pressure > 0) intradayMap[minuteKey].sys = Number(d.systolic_pressure);
+        if (d.diastolic_pressure > 0) intradayMap[minuteKey].dia = Number(d.diastolic_pressure);
+        if (d.spo2 > 0) intradayMap[minuteKey].spo2 = Number(d.spo2);
+        if (d.temperature > 0) intradayMap[minuteKey].temp = Number(d.temperature);
+      });
+
+      // Convert to array and filter out empty sessions
+      const intraday = Object.values(intradayMap)
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .slice(-40) // Keep last 40 minutes of activity
+        .filter(d => d.bpm || d.sys || d.spo2 || d.temp);
 
       const avg = arr => arr.length ? Math.round(arr.reduce((a, b) => a + Number(b), 0) / arr.length) : null;
 
-      // Daily
+      // 3. Daily - Group by day
       const dailyMap = {};
       chrono.forEach(d => {
-        const day = new Date(d.measurement_time).toLocaleDateString("es-CO", { day: "2-digit", month: "short" });
-        if (!dailyMap[day]) dailyMap[day] = { label: day, bpm: [], sys: [], dia: [], spo2: [] };
+        const day = new Date(d.measurement_time).toLocaleDateString("es-CO", { timeZone: "America/Bogota", day: "2-digit", month: "short" });
+        if (!dailyMap[day]) dailyMap[day] = { label: day, bpm: [], sys: [], dia: [], spo2: [], temp: [] };
         if (d.heart_rate > 0) dailyMap[day].bpm.push(d.heart_rate);
         if (d.systolic_pressure > 0) dailyMap[day].sys.push(d.systolic_pressure);
         if (d.diastolic_pressure > 0) dailyMap[day].dia.push(d.diastolic_pressure);
         if (d.spo2 > 0) dailyMap[day].spo2.push(d.spo2);
+        if (d.temperature > 0) dailyMap[day].temp.push(d.temperature);
       });
       const daily = Object.values(dailyMap).map(d => ({
-        label: d.label, bpm: avg(d.bpm), sys: avg(d.sys), dia: avg(d.dia), spo2: avg(d.spo2)
+        label: d.label, bpm: avg(d.bpm), sys: avg(d.sys), dia: avg(d.dia), spo2: avg(d.spo2), temp: avg(d.temp)
       }));
 
-      // Monthly
+      // 4. Monthly - Group by month
       const monthlyMap = {};
       chrono.forEach(d => {
-        const month = new Date(d.measurement_time).toLocaleDateString("es-CO", { month: "long" });
-        if (!monthlyMap[month]) monthlyMap[month] = { label: month, bpm: [], sys: [], dia: [], spo2: [] };
+        const month = new Date(d.measurement_time).toLocaleDateString("es-CO", { timeZone: "America/Bogota", month: "long" });
+        if (!monthlyMap[month]) monthlyMap[month] = { label: month, bpm: [], sys: [], dia: [], spo2: [], temp: [] };
         if (d.heart_rate > 0) monthlyMap[month].bpm.push(d.heart_rate);
         if (d.systolic_pressure > 0) monthlyMap[month].sys.push(d.systolic_pressure);
         if (d.diastolic_pressure > 0) monthlyMap[month].dia.push(d.diastolic_pressure);
         if (d.spo2 > 0) monthlyMap[month].spo2.push(d.spo2);
+        if (d.temperature > 0) monthlyMap[month].temp.push(d.temperature);
       });
       const monthly = Object.values(monthlyMap).map(d => ({
-        label: d.label, bpm: avg(d.bpm), sys: avg(d.sys), dia: avg(d.dia), spo2: avg(d.spo2)
+        label: d.label, bpm: avg(d.bpm), sys: avg(d.sys), dia: avg(d.dia), spo2: avg(d.spo2), temp: avg(d.temp)
       }));
 
       setHealthHistory({ intraday, daily, monthly });
-    } catch { setHealthData(null); setHealthHistory({ intraday: [], daily: [], monthly: [] }); }
+    } catch (error) { 
+      console.error("Error loading health:", error);
+      setHealthData(null); 
+      setHealthHistory({ intraday: [], daily: [], monthly: [] }); 
+    }
   };
 
   // ─── Map ──────────────────────────────────────────────────────────────────
@@ -295,6 +324,23 @@ export default function MapPage() {
     const r = await sendCmd(imei, "hrtstart");
     setHealthReq({ loading: false, status: r.success ? "success" : "error" });
     setTimeout(() => setHealthReq({ loading: false, status: "" }), 3000);
+  };
+
+  const reqTemp = async (imei) => {
+    setTempReq({ loading: true, status: "sending" });
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    
+    // Ráfaga de comandos espaciada para máxima compatibilidad
+    await sendCmd(imei, "BT");
+    await sleep(500);
+    await sendCmd(imei, "BTEMP2");
+    await sleep(500);
+    await sendCmd(imei, "btemp2");
+    await sleep(500);
+    const r = await sendCmd(imei, "HT");
+    
+    setTempReq({ loading: false, status: r.success ? "success" : "error" });
+    setTimeout(() => setTempReq({ loading: false, status: "" }), 3000);
   };
 
   const reqHealthAuto = async (imei) => {
@@ -627,7 +673,7 @@ export default function MapPage() {
   );
 
   const viewHealth = () => {
-    const noData = !healthData || (!healthData.heart_rate && !healthData.systolic_pressure && !healthData.spo2);
+    const noData = !healthData || (!healthData.heart_rate && !healthData.systolic_pressure && !healthData.spo2 && !healthData.temperature);
     
     return (
       <div className="animate-fade-in" style={{ display: "grid", gridTemplateColumns: "240px 1fr", gap: 16 }}>
@@ -687,6 +733,14 @@ export default function MapPage() {
                 </button>
                 <button 
                   className="btn btn-ghost" 
+                  style={{ width: "100%", justifyContent: "center", fontSize: 11.5, background: "rgba(249,115,22,0.1)", color: "#f97316", border: "1px solid rgba(249,115,22,0.2)" }} 
+                  onClick={() => reqTemp(selectedDevice.imei)} 
+                  disabled={tempReq.loading}
+                >
+                  {tempReq.loading ? "Midiendo..." : "🌡️ Medir Temperatura"}
+                </button>
+                <button 
+                  className="btn btn-ghost" 
                   style={{ width: "100%", justifyContent: "center", fontSize: 11.5, background: "var(--bg-overlay)", border: "1px solid var(--border-subtle)" }} 
                   onClick={() => reqHealthAuto(selectedDevice.imei)} 
                   disabled={healthAutoReq.loading}
@@ -694,8 +748,9 @@ export default function MapPage() {
                   {healthAutoReq.loading ? "Enviando..." : "⏱️ Auto 1h"}
                 </button>
                 {healthReq.status === "success" && <div style={{ fontSize: 10.5, color: "#22c55e", textAlign: "center", marginTop: 2 }}>Comando enviado ✓</div>}
+                {tempReq.status === "success" && <div style={{ fontSize: 10.5, color: "#22c55e", textAlign: "center", marginTop: 2 }}>Comando Temp enviado ✓</div>}
                 {healthAutoReq.status === "success" && <div style={{ fontSize: 10.5, color: "#22c55e", textAlign: "center", marginTop: 2 }}>Enviado a TODOS ✓</div>}
-                {(healthReq.status === "error" || healthAutoReq.status === "error") && <div style={{ fontSize: 10.5, color: "#ef4444", textAlign: "center", marginTop: 2 }}>Error de envío</div>}
+                {(healthReq.status === "error" || healthAutoReq.status === "error" || tempReq.status === "error") && <div style={{ fontSize: 10.5, color: "#ef4444", textAlign: "center", marginTop: 2 }}>Error de envío</div>}
               </div>
             )}
           </div>
@@ -727,6 +782,11 @@ export default function MapPage() {
                   <div className="kpi-label">SpO₂</div>
                   <div className="kpi-value">{noData ? "—" : healthData.spo2 || "—"}</div>
                   <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>%</div>
+                </div>
+                <div className="kpi-card orange">
+                  <div className="kpi-label">Temperatura</div>
+                  <div className="kpi-value">{noData ? "—" : healthData.temperature || "—"}</div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>°C</div>
                 </div>
               </div>
 
@@ -765,6 +825,13 @@ export default function MapPage() {
                         <td style={{ padding: "12px 16px", fontSize: 12.5, fontWeight: 600, color: (healthData.heart_rate > 120 || healthData.heart_rate < 50) ? "#ef4444" : (healthData.heart_rate > 100 ? "#f97316" : "#22c55e") }}>{healthData.heart_rate} bpm</td>
                         <td style={{ padding: "12px 16px", fontSize: 12.5, fontWeight: 600, color: (healthData.heart_rate > 120 || healthData.heart_rate < 50) ? "#ef4444" : (healthData.heart_rate > 100 ? "#f97316" : "var(--text-secondary)") }}>
                           {healthData.heart_rate > 120 ? "Taquicardia severa" : (healthData.heart_rate > 100 ? "Taquicardia leve" : (healthData.heart_rate < 50 ? "Bradicardia" : "Normal"))}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: "12px 16px", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)" }}>Temperatura Corporal</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12.5, fontWeight: 600, color: (healthData.temperature > 37.5 || healthData.temperature < 35.5) ? "#ef4444" : "#22c55e" }}>{healthData.temperature || "—"} °C</td>
+                        <td style={{ padding: "12px 16px", fontSize: 12.5, fontWeight: 600, color: (healthData.temperature > 37.5 || healthData.temperature < 35.5) ? "#ef4444" : "var(--text-secondary)" }}>
+                          {healthData.temperature > 38 ? "Fiebre alta" : (healthData.temperature > 37.5 ? "Febrícula" : (healthData.temperature < 35.5 ? "Hipotermia" : "Normal"))}
                         </td>
                       </tr>
                     </tbody>
@@ -850,6 +917,26 @@ export default function MapPage() {
                               <ReferenceLine y={60} stroke="#eab308" strokeDasharray="3 3" />
                               <ReferenceLine y={100} stroke="#f97316" strokeDasharray="3 3" />
                               <Line type="monotone" name="Pulso (BPM)" dataKey="bpm" stroke="#ef4444" strokeWidth={2} dot={{ r: 2, fill: "#ef4444" }} connectNulls />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+
+                      {/* 4. Temperatura */}
+                      <div style={{ height: 200, position: "relative" }}>
+                        <div style={{ textAlign: "center", fontSize: 12, fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>Temperatura Corporal (°C)</div>
+                        <div style={{ position: "absolute", top: 18, left: 32, background: "rgba(0,0,0,0.6)", padding: "3px 6px", borderRadius: 4, zIndex: 10, fontSize: 9 }}>
+                           <span style={{ color: "#eab308", marginRight: 4 }}>--</span> Alarma (37.5)
+                        </div>
+                        <div style={{ height: 180 }}>
+                          <ResponsiveContainer key={healthRange} width="100%" height="100%">
+                            <LineChart data={healthHistory[healthRange]} syncId="healthSync" margin={{ top: 5, right: 15, left: -20, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                              <XAxis dataKey="label" stroke="var(--text-muted)" fontSize={9} tickLine={false} axisLine={false} />
+                              <YAxis stroke="var(--text-muted)" fontSize={9} tickLine={false} axisLine={false} domain={[34, 42]} />
+                              <Tooltip contentStyle={{ background: "rgba(15,17,23,0.9)", border: "1px solid var(--border-default)", borderRadius: 8, fontSize: 11 }} />
+                              <ReferenceLine y={37.5} stroke="#eab308" strokeDasharray="3 3" />
+                              <Line type="monotone" name="Temp (°C)" dataKey="temp" stroke="#eab308" strokeWidth={2} dot={{ r: 2, fill: "#eab308" }} connectNulls />
                             </LineChart>
                           </ResponsiveContainer>
                         </div>
