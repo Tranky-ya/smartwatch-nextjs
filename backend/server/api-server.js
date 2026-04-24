@@ -128,15 +128,53 @@ class APIServer {
         }
 
         const success = await this.tcpServer.sendCommand(imei, command, params);
-        
+
         if (!success) {
           return res.status(404).json({ error: 'Dispositivo offline o no encontrado' });
         }
-        
+
         res.json({ success: true, message: `Comando ${command} enviado` });
-      } catch (e) { 
-        console.error('Error comando:', e); 
-        res.status(500).json({ error: e.message }); 
+      } catch (e) {
+        console.error('Error comando:', e);
+        res.status(500).json({ error: e.message });
+      }
+    });
+
+    // ⭐ NUEVO: Endpoint para migrar dispositivo a otro servidor
+    this.app.post('/api/devices/:imei/change-server', authenticateToken, async (req, res) => {
+      try {
+        const { imei } = req.params;
+        const { ip, port } = req.body;
+
+        if (!ip || !port) {
+          return res.status(400).json({
+            error: 'Faltan parámetros requeridos: ip y port'
+          });
+        }
+
+        const success = await this.tcpServer.changeServerIP(imei, ip, port);
+
+        if (!success) {
+          return res.status(404).json({
+            error: 'Dispositivo offline o no encontrado'
+          });
+        }
+
+        res.json({
+          success: true,
+          message: `Comando IP enviado a ${imei}`,
+          warning: '⚠️ IMPORTANTE: El dispositivo debe reiniciarse OUTDOORS varias veces para confirmar el cambio de servidor',
+          next_steps: [
+            '1. El dispositivo se desconectará de este servidor',
+            '2. Reiniciar el dispositivo outdoors (donde tenga señal GPS)',
+            '3. Repetir el reinicio 2-3 veces si es necesario',
+            '4. Verificar conexión en el nuevo servidor',
+            '5. Si no conecta después de 6-8 min, enviar SMS: pw,123456,ts#'
+          ]
+        });
+      } catch (e) {
+        console.error('[API] Error cambiando servidor:', e);
+        res.status(500).json({ error: e.message });
       }
     });
 

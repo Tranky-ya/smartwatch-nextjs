@@ -98,14 +98,19 @@ class ProtocolParser {
       // El payload real está desde parts[3]
       const payload = parts.slice(3).join('*');
 
-      // 🧪 VALIDACIÓN 3: IMEI (10 dígitos)
-      console.log(`🧪 [VALIDATE] IMEI: ${JSON.stringify(imei)}`);
-      if (!imei.match(/^\d{10}$/)) {
-        console.warn(`⚠️ ❌ IMEI INVÁLIDO - Debe ser 10 dígitos`);
+      // 🧪 VALIDACIÓN 3: IMEI/ID (10 dígitos numéricos O alfanumérico 8-12 chars)
+      // ⚠️ BUG FIX #11: Dispositivos 4G modernos usan IDs alfanuméricos auto-generados
+      // Ejemplo: g3a4b9zbba (doc "Server Platform Auto Generate Device ID" 2023)
+      console.log(`🧪 [VALIDATE] IMEI/ID: ${JSON.stringify(imei)}`);
+      const isClassicIMEI = /^\d{10}$/.test(imei);
+      const isAutoGenID = /^[a-z0-9]{8,12}$/i.test(imei);
+
+      if (!isClassicIMEI && !isAutoGenID) {
+        console.warn(`⚠️ ❌ IMEI/ID INVÁLIDO - Debe ser 10 dígitos numéricos o 8-12 alfanuméricos`);
         console.warn(`   Recibido: ${JSON.stringify(imei)}`);
         return null;
       }
-      console.log(`✅ IMEI válido: ${imei}`);
+      console.log(`✅ IMEI/ID válido: ${imei} (${isClassicIMEI ? 'clásico' : 'auto-generado'})`);
 
       // 🧪 VALIDACIÓN 4: Detectar si es INDEX o HEX_LEN
       console.log(`🧪 [VALIDATE] Tercer campo (INDEX/LEN): ${JSON.stringify(third)}`);

@@ -11,7 +11,7 @@ const Device = sequelize.define('Device', {
     type: DataTypes.STRING(20),
     allowNull: false,
     unique: true,
-    comment: 'IMEI único del dispositivo'
+    comment: 'IMEI/ID único del dispositivo (10 dígitos numéricos o 8-12 alfanuméricos como g3a4b9zbba)'
   },
   name: {
     type: DataTypes.STRING(100),

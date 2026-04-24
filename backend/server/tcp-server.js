@@ -302,8 +302,13 @@ class TCPServer extends EventEmitter {
       console.log(`   Tipo: ${parsed.type} (${typeDesc})`);
       console.log(`   IMEI: ${parsed.imei}`);
 
-      if (!String(parsed.imei || '').match(/^\d{10}$/)) {
-        console.warn(`[PARSE-FAIL] IMEI invalido desde parser, descartando para evitar device fantasma`);
+      // ⚠️ BUG FIX #11: Soportar IDs alfanuméricos (g3a4b9zbba) de dispositivos 4G modernos
+      const imeiStr = String(parsed.imei || '');
+      const isClassicIMEI = /^\d{10}$/.test(imeiStr);
+      const isAutoGenID = /^[a-z0-9]{8,12}$/i.test(imeiStr);
+
+      if (!isClassicIMEI && !isAutoGenID) {
+        console.warn(`[PARSE-FAIL] IMEI/ID inválido desde parser, descartando para evitar device fantasma`);
         console.warn(`   Tipo: ${parsed.type}, IMEI: ${JSON.stringify(parsed.imei)}, Mensaje: ${JSON.stringify(message)}`);
         return currentDevice;
       }
