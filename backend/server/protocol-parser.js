@@ -51,16 +51,9 @@ class ProtocolParser {
           }
         }
 
-        // HEURÍSTICA 3: Fallback si conocemos el IP o el patrón de bytes es de un dispositivo reportado
-        if (!detectedID) {
-          // Para el caso GS18 reportado, si no lo extraemos, usamos el mapping si el buffer tiene el tamaño esperado
-          if (message.length >= 40) {
-             // Heurística temporal: si el buffer tiene 47 bytes (como los reportados), 
-             // y no tenemos otro, usamos el último reportado para que "aparezca" en la web
-             // NOTA: Esto se refinará cuando tengamos más muestras.
-             detectedID = '6770069708'; 
-          }
-        }
+        // ⚠️ BUG FIX #9: NO inventar IMEIs - descartar frames sin ID válido
+        // La heurística anterior asignaba '6770069708' arbitrariamente, causando fusión de datos
+        // de múltiples dispositivos bajo un solo IMEI fantasma
 
         if (detectedID) {
           return {
@@ -252,14 +245,9 @@ class ProtocolParser {
     return parsed;
   }
 
-  static generateLKResponse(parsed) {
-    // Respuesta exacta que el dispositivo espera
-    // [3G*IMEI*INDEX*LK]
-    const proto = parsed.protocol || '3G';
-    const imei10 = (parsed.imei || '').slice(-10);
-    const idx = parsed.index || '0001';
-    return `[${proto}*${imei10}*${idx}*LK]`;
-  }
+  // ⚠️ BUG FIX #7: Función obsoleta eliminada
+  // Esta función tenía lógica rota (usaba INDEX en lugar de LEN)
+  // Ahora usamos generateCommandResponse(imei, 'LK', protocol) que calcula LEN correctamente
 
   /**
    * Parse mensaje UD (Ubicación)
@@ -908,7 +896,7 @@ class ProtocolParser {
 
   /**
    * Genera respuesta para el dispositivo en formato Beesure
-   * Formato: [3G*IMEI*HEX_LEN*RESPONSE]
+   * Formato: [PROTOCOL*IMEI*HEX_LEN*RESPONSE]
    *
    * ⚠️ REGLA DE ORO DEL LK:
    * - Si recibe: [3G*8800000015*000D*LK,50,100,100]
@@ -916,9 +904,12 @@ class ProtocolParser {
    * - NO reutilices el LEN recibido (000D)
    * - LK siempre tiene longitud 2 → hex(2) = 0002
    *
+   * ⚠️ BUG FIX #4: SIEMPRE usar el protocolo del mensaje original (CS, SG, 3G, etc.)
+   * Algunos firmware rechazan respuestas con protocolo incorrecto
+   *
    * Dispositivo rechaza respuestas con LEN incorrecto.
    */
-  static generateCommandResponse(imei, command) {
+  static generateCommandResponse(imei, command, protocol = '3G') {
     // Extraer los últimos 10 dígitos del IMEI si es necesario
     const imei10 = imei.slice(-10);
 
@@ -928,25 +919,33 @@ class ProtocolParser {
         // ✅ SIEMPRE responder solo "LK" → longitud 2 → 0002
         responseContent = 'LK';
         break;
-      case 'BT':
-      case 'RYIMEI':
-      case 'CR':
-      case 'DW':
-      case 'FIND':
-      case 'HRTSTART':
-      case 'ANYTIME':
-      case 'MONITOR':
-      case 'FALLDET':
-      case 'IP':
-      case 'UPLOAD':
-      case 'RESET':
-      case 'POWEROFF':
-      case 'FACTORY':
+      // ⚠️ BUG FIX #3: Separar comandos que son ECO de los que requieren respuesta
+
+      // COMANDOS QUE EL DEVICE ENVÍA Y ESPERA ECO PARA CALLARSE
+      // Si no respondemos, el device los vuelve a mandar cada ciclo
       case 'CALLLOG':
       case 'DEVICEFUNCCOUNT':
       case 'ICCID':
       case 'RYIMEI':
       case 'APPCONTACTTEL':
+        responseContent = command.toUpperCase(); // Responder con el mismo comando vacío
+        break;
+
+      // COMANDOS QUE SON ECO DE LO QUE EL SERVIDOR ENVIÓ AL DEVICE
+      // NO responder para evitar bucles infinitos
+      case 'CR':
+      case 'DW':
+      case 'FIND':
+      case 'HRTSTART':
+      case 'IP':
+      case 'UPLOAD':
+      case 'RESET':
+      case 'POWEROFF':
+      case 'FACTORY':
+      case 'MONITOR':
+      case 'FALLDET':
+      case 'ANYTIME':
+      case 'BT':
         return null; // Evitar bucles de eco
       case 'UD':
       case 'UD_WCDMA':
@@ -993,8 +992,8 @@ class ProtocolParser {
     // Calcular longitud en hexadecimal
     const hexLength = this.calculateHexLength(responseContent);
 
-    // Construir respuesta completa
-    return `[3G*${imei10}*${hexLength}*${responseContent}]`;
+    // Construir respuesta completa con el protocolo correcto
+    return `[${protocol}*${imei10}*${hexLength}*${responseContent}]`;
   }
 
   /**

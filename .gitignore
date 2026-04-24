@@ -22,8 +22,15 @@ dist/
 .env.development.local
 .env.test.local
 .env.production.local
+.env.docker
 *.env
 *.env.*
+!*.env.example
+
+# ⚠️ BUG FIX #10: Proteger docker-compose con credenciales reales
+# Solo versionar el .example, no el archivo con secrets
+docker-compose.yml
+!docker-compose.example.yml
 
 # Logs
 logs/

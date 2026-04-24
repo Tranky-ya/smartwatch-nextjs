@@ -47,8 +47,10 @@ class TCPServer extends EventEmitter {
     this.locationPrioritizer = new LocationPrioritizationService();
 
     // Configuración de timeouts
-    this.HEARTBEAT_TIMEOUT = 2 * 60 * 1000; // 2 minutos sin heartbeat = offline
-    this.MONITOR_INTERVAL = 15 * 1000; // Revisar cada 15 segundos
+    // ⚠️ BUG FIX #1: El protocolo 4P-Touch envía LK cada 5-8 min después de los primeros 30 min
+    // Timeout de 2 min causaba desconexiones prematuras de dispositivos saludables
+    this.HEARTBEAT_TIMEOUT = 15 * 60 * 1000; // 15 minutos sin heartbeat = offline
+    this.MONITOR_INTERVAL = 60 * 1000; // Revisar cada 60 segundos
 
     this.locationEngine = new HybridLocationEngine({
       googleApiKey: process.env.GOOGLE_GEOLOCATION_API_KEY,
@@ -171,8 +173,10 @@ class TCPServer extends EventEmitter {
 
     socket.on('data', async (data) => {
       try {
-        const rawString = data.toString('utf8');
-        console.log(`\n[RAW] [${clientInfo}] >>> ${JSON.stringify(rawString)}`);
+        // ⚠️ BUG FIX #5: Usar 'binary' en lugar de 'utf8' para preservar bytes binarios
+        // TK (voz AMR) y img (fotos JPEG) contienen datos binarios que utf8 corrompe
+        const rawString = data.toString('binary');
+        console.log(`\n[RAW] [${clientInfo}] >>> ${JSON.stringify(rawString.slice(0, 200))}`);
         console.log(`   Bytes: [${Array.from(data).map(b => '0x' + b.toString(16).padStart(2, '0')).join(', ')}]`);
 
         buffer += rawString;
@@ -384,7 +388,12 @@ class TCPServer extends EventEmitter {
           console.log(`[INFO] [${device.imei}] Mensaje tipo ${parsed.type} recibido sin handler específico (OK)`);
       }
 
-      const response = ProtocolParser.generateCommandResponse(device.imei, parsed.type);
+      // ⚠️ BUG FIX #4: Pasar el protocolo original del mensaje (CS, SG, 3G, etc.)
+      const response = ProtocolParser.generateCommandResponse(
+        device.imei,
+        parsed.type,
+        parsed.protocol || '3G'
+      );
 
       // 🚫 Inhibir respuesta automática para TK para evitar bucles infinitos
       if (parsed.type === 'TK' || parsed.type === 'TKQ' || parsed.type === 'TKQ2') {
@@ -394,11 +403,11 @@ class TCPServer extends EventEmitter {
 
       if (response) {
         console.log(`\n[RESPONSE] Respuesta generada`);
-        const responseWithNewline = response + '\n';
+        // ⚠️ BUG FIX #2: El protocolo 4P-Touch requiere frames EXACTOS [...]
+        // NO agregar \n ni ningún byte extra - algunos firmware rechazan la respuesta
         console.log(`[SEND] [${parsed.imei}] Mensaje: ${JSON.stringify(response)}`);
-        console.log(`[SEND] [${parsed.imei}] Con \\n: ${JSON.stringify(responseWithNewline)}`);
-        console.log(`[SEND] [${parsed.imei}] Bytes: [${Array.from(Buffer.from(responseWithNewline)).map(b => '0x' + b.toString(16).padStart(2, '0')).join(', ')}]`);
-        socket.write(responseWithNewline);
+        console.log(`[SEND] [${parsed.imei}] Bytes: [${Array.from(Buffer.from(response)).map(b => '0x' + b.toString(16).padStart(2, '0')).join(', ')}]`);
+        socket.write(response);
         console.log(`[SEND-OK] [${parsed.imei}] Respuesta enviada exitosamente`);
       } else {
         console.log(`[INFO] [${parsed.imei}] Sin respuesta para tipo: ${parsed.type}`);
@@ -462,8 +471,9 @@ class TCPServer extends EventEmitter {
           longitude: parsed.longitude,
           gpsStatus: parsed.valid,
           satellites: parsed.satellites,
-          mcc: parsed.mcc || 334, // Default Mexico if unknown
-          mnc: parsed.mnc || 1,
+          // ⚠️ BUG FIX #6: Default a Colombia (732) en lugar de México (334)
+          mcc: parsed.mcc || 732, // Colombia: Claro=732,101, Tigo=732,103, Movistar=732,123
+          mnc: parsed.mnc || 101,
           lac: parsed.lac,
           cellId: parsed.cell_id,
           wifiAccessPoints: parsed.wifi_data ? ProtocolParser.parseWiFiData(parsed.wifi_raw.split(',')) : []
@@ -493,11 +503,13 @@ class TCPServer extends EventEmitter {
       const finalSource = bestLocation.source;
       const finalAccuracy = bestLocation.accuracy;
 
-      // 🛑 ZERO COORDINATE GUARD (Build v3.0.A)
-      // Si el motor híbrido falló y el prioritizador devolvió 0,0, no ensuciar la base de datos.
+      // ⚠️ BUG FIX #8: Guardar posiciones 0,0 como PENDING_RESOLUTION en lugar de descartarlas
+      // Estas posiciones pueden tener datos LBS/WiFi recuperables en batch posterior
+      let finalLocationType = finalSource;
       if (finalLat === 0 && finalLng === 0) {
-        console.warn(`[WARN] [${device.imei}] Posición RECHAZADA (0,0 detected) - Manteniendo última ubicación válida en el mapa`);
-        return;
+        console.warn(`[WARN] [${device.imei}] Coordenadas 0,0 detectadas - Guardando como PENDING_RESOLUTION para retry`);
+        finalLocationType = 'PENDING_RESOLUTION';
+        // Continuar para guardar metadata LBS/WiFi cruda
       }
 
       await Position.create({
@@ -525,7 +537,7 @@ class TCPServer extends EventEmitter {
         alarm_type: parsed.alarm_type || null,
         alarm_decoded: parsed.alarm_decoded || null,
         raw_message: parsed.raw_message || null,
-        location_type: finalSource,
+        location_type: finalLocationType,
         accuracy: finalAccuracy
       });
 
@@ -847,14 +859,14 @@ class TCPServer extends EventEmitter {
       const commandMessage = ProtocolParser.generateCommand(imei, command, params, {
         protocol: validation.protocol
       });
-      const messageWithNewline = commandMessage + '\n';
 
       console.log(`\n[COMMAND] Enviando comando al dispositivo`);
       console.log(`   IMEI: ${imei}`);
       console.log(`   Comando: ${command}`);
       console.log(`   Parametros: ${JSON.stringify(params)}`);
-      
-      const buffer = Buffer.from(messageWithNewline);
+
+      // ⚠️ BUG FIX #2: NO agregar \n - el protocolo 4P-Touch requiere frames exactos
+      const buffer = Buffer.from(commandMessage);
       console.log(`[SEND] [${imei}] Mensaje: ${JSON.stringify(commandMessage)}`);
       console.log(`[SEND] [${imei}] Bytes: [${Array.from(buffer).map(b => '0x' + b.toString(16).padStart(2, '0')).join(', ')}]`);
 
@@ -989,6 +1001,9 @@ class TCPServer extends EventEmitter {
 
           await device.update({ is_online: false });
 
+          // ⚠️ BUG FIX #1: NO destruir sockets forzadamente - dejar que el device cierre la conexión
+          // socket.destroy() forzado corta conexiones saludables donde el LK tarda 5-8 min
+          // Solo limpiar el registro de conexiones si el socket ya está destruido naturalmente
           let socketToClose = null;
           for (const [sock, dev] of this.connections.entries()) {
             if (dev && dev.imei === device.imei) {
@@ -997,9 +1012,8 @@ class TCPServer extends EventEmitter {
             }
           }
 
-          if (socketToClose && !socketToClose.destroyed) {
-            console.log(`[MONITOR] [${device.imei}] Cerrando socket obsoleto`);
-            socketToClose.destroy();
+          if (socketToClose && socketToClose.destroyed) {
+            console.log(`[MONITOR] [${device.imei}] Limpiando socket ya cerrado`);
             this.connections.delete(socketToClose);
           }
 
