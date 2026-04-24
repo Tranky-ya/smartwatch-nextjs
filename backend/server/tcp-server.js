@@ -91,6 +91,50 @@ class TCPServer extends EventEmitter {
     return null;
   }
 
+  getConnectionInfoByIMEI(imei) {
+    if (!imei) return null;
+    const imeiStr = String(imei).slice(-10);
+    const entries = Array.from(this.connections.entries());
+
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const [socket, info] = entries[i];
+
+      if (info && info.imei === imeiStr) {
+        if (!socket.destroyed && socket.writable) {
+          return info;
+        }
+
+        this.connections.delete(socket);
+      }
+    }
+
+    return null;
+  }
+
+  async getDeviceProtocol(imei) {
+    const connectionInfo = this.getConnectionInfoByIMEI(imei);
+    const liveProtocol = connectionInfo?.protocol || connectionInfo?.device?.device_info?.last_protocol;
+    if (liveProtocol) return String(liveProtocol).toUpperCase();
+
+    const device = await Device.findOne({ where: { imei: String(imei).slice(-10) } });
+    const storedProtocol = device?.device_info?.last_protocol || device?.device_info?.protocol;
+    return storedProtocol ? String(storedProtocol).toUpperCase() : '3G';
+  }
+
+  async validateCommandSupport(imei, command) {
+    const protocol = await this.getDeviceProtocol(imei);
+
+    if (protocol === 'AQSH') {
+      return {
+        ok: false,
+        protocol,
+        reason: `El dispositivo ${imei} usa protocolo AQSH/binario y no acepta comandos Beesure de texto como ${String(command || '').toUpperCase()}.`
+      };
+    }
+
+    return { ok: true, protocol };
+  }
+
 
   async start() {
     try {
@@ -133,20 +177,23 @@ class TCPServer extends EventEmitter {
 
         buffer += rawString;
 
-        // 🛡️ Limpieza de paquetes binarios AQSH (AnQiShenHua)
-        // Estos paquetes no usan corchetes y ensucian el buffer de texto.
+        // 🛡️ Manejo de paquetes binarios AQSH (AnQiShenHua)
+        // Intentar parsear el ID si el buffer contiene AQSH
         if (buffer.includes('AQSH')) {
           const aqshIdx = buffer.indexOf('AQSH');
-          // Si el paquete está al inicio o precedido por un byte nulo/basura
-          if (aqshIdx < 5) { 
-            console.log(`[BINARY] [${clientInfo}] Detectado preámbulo AQSH - Limpiando buffer binario`);
-            // Buscamos si hay un '[' después para no borrar mensajes válidos
-            const nextFrame = buffer.indexOf('[', aqshIdx);
-            if (nextFrame !== -1) {
-              buffer = buffer.slice(nextFrame);
-            } else {
-              // Si no hay frame válido cerca, esperar o limpiar si el buffer es muy grande
-              if (buffer.length > 500) buffer = ''; 
+          if (aqshIdx < 10) {
+            console.log(`[BINARY] [${clientInfo}] Detectado paquete AQSH - Intentando parsear ID dinámicamente...`);
+            
+            // Usar el Buffer original 'data' para evitar corrupción por toString('utf8')
+            const rawFrame = data.slice(data.indexOf('AQSH'));
+            
+            if (rawFrame.length >= 20) {
+              console.log(`[AQSH] Procesando buffer binario (Largo: ${rawFrame.length})`);
+              // Pasar el Buffer directamente al parser
+              currentDevice = await processMessage(socket, rawFrame, currentDevice);
+              
+              // Limpiar buffer de texto si ya se procesó como binario
+              if (buffer.length < 100) buffer = '';
             }
           }
         }
@@ -275,14 +322,31 @@ class TCPServer extends EventEmitter {
           console.log(`[DB-OK] Dispositivo encontrado en BD`);
         }
 
-        this.connections.set(socket, { imei: parsed.imei, device });
+        this.connections.set(socket, {
+          imei: parsed.imei,
+          device,
+          protocol: parsed.protocol || device.device_info?.last_protocol || '3G'
+        });
       }
 
       console.log(`[DB-UPDATE] Actualizando estado: is_online=true`);
+      const mergedDeviceInfo = {
+        ...(device.device_info || {}),
+        last_protocol: parsed.protocol || device.device_info?.last_protocol || '3G'
+      };
+
       await device.update({
         is_online: true,
-        last_connection: new Date()
+        last_connection: new Date(),
+        device_info: mergedDeviceInfo
       });
+
+      const currentConn = this.connections.get(socket);
+      if (currentConn) {
+        currentConn.device = device;
+        currentConn.protocol = mergedDeviceInfo.last_protocol;
+        this.connections.set(socket, currentConn);
+      }
 
       console.log(`[ROUTER] Ruteando al handler de tipo: ${parsed.type}`);
 
@@ -767,6 +831,12 @@ class TCPServer extends EventEmitter {
 
   async sendCommand(imei, command, params = {}) {
     try {
+      const validation = await this.validateCommandSupport(imei, command);
+      if (!validation.ok) {
+        console.error(`[ERROR] [${imei}] ${validation.reason}`);
+        return false;
+      }
+
       const socket = this.getSocketByIMEI(imei);
 
       if (!socket || socket.destroyed) {
@@ -774,7 +844,9 @@ class TCPServer extends EventEmitter {
         return false;
       }
 
-      const commandMessage = ProtocolParser.generateCommand(imei, command, params);
+      const commandMessage = ProtocolParser.generateCommand(imei, command, params, {
+        protocol: validation.protocol
+      });
       const messageWithNewline = commandMessage + '\n';
 
       console.log(`\n[COMMAND] Enviando comando al dispositivo`);

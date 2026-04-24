@@ -117,6 +117,16 @@ class APIServer {
     this.app.post('/api/devices/command', authenticateToken, async (req, res) => {
       try {
         const { imei, command, params = {} } = req.body;
+        const validation = await this.tcpServer.validateCommandSupport(imei, command);
+
+        if (!validation.ok) {
+          return res.status(400).json({
+            success: false,
+            error: validation.reason,
+            protocol: validation.protocol
+          });
+        }
+
         const success = await this.tcpServer.sendCommand(imei, command, params);
         
         if (!success) {
