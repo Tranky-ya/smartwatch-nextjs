@@ -1042,7 +1042,15 @@ class ProtocolParser {
         break;
       case 'SOS':
         // Configurar 3 números SOS
-        commandContent = `SOS,${params.phone1},${params.phone2},${params.phone3}`;
+        // ⚠️ BUG FIX: Soportar ambos formatos (frontend envía "value", API puede enviar phone1/2/3)
+        if (params.value && params.value.includes(',')) {
+          // Formato frontend: params.value = "3001234567,3009876543,3005554444"
+          const phones = params.value.split(',').map(p => p.trim());
+          commandContent = `SOS,${phones[0] || ''},${phones[1] || ''},${phones[2] || ''}`;
+        } else {
+          // Formato API directo: params.phone1, params.phone2, params.phone3
+          commandContent = `SOS,${params.phone1 || ''},${params.phone2 || ''},${params.phone3 || ''}`;
+        }
         break;
       case 'LZ':
         // Idioma y zona horaria
