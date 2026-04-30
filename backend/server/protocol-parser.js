@@ -953,6 +953,19 @@ class ProtocolParser {
       case 'FALLDET':
       case 'ANYTIME':
       case 'BT':
+      case 'TS':
+      case 'VERNO':
+      case 'HR':
+      case 'BP':
+      case 'SPO2':
+      case 'PW':
+      case 'LZ':
+      case 'CALL':
+      case 'CENTER':
+      case 'SOS':
+      case 'SOS1':
+      case 'SOS2':
+      case 'SOS3':
         return null; // Evitar bucles de eco
       case 'UD':
       case 'UD_WCDMA':
@@ -986,12 +999,6 @@ class ProtocolParser {
         break;
       case 'PP':
         responseContent = imei10; // Responder con el IMEI si amigo agregado
-        break;
-      case 'TS':
-        responseContent = 'TS';
-        break;
-      case 'VERNO':
-        responseContent = 'VERNO';
         break;
       case 'UNKNOWN':
         return null;
