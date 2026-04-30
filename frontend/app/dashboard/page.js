@@ -68,6 +68,12 @@ export default function MapPage() {
   const [cmdNotif, setCmdNotif] = useState(null);
   const cmdNotifTimer = useRef(null);
 
+  // Route + Geofence + Events state
+  const [routeDevice, setRouteDevice] = useState(null);
+  const [geoForm, setGeoForm] = useState({ visible: false, name: '', lat: '', lng: '', radius: 500, device_id: '' });
+  const [events, setEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+
   // Map
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
@@ -129,6 +135,7 @@ export default function MapPage() {
         mapInstance.current.invalidateSize();
       }, 50);
     }
+    if (activeView === "events") loadEvents();
   }, [activeView]);
 
   // ─── Data Loading ─────────────────────────────────────────────────────────
@@ -411,6 +418,57 @@ export default function MapPage() {
     alert(r.success ? "¡Contactos SOS sincronizados con éxito al reloj!" : "Hubo un error al enviar al reloj. Asegúrate de que esté en línea.");
   };
 
+  const loadEvents = async () => {
+    setEventsLoading(true);
+    try {
+      const r = await fetch(`${API_URL}/api/alerts?limit=100`, { headers: authHeaders() });
+      const data = await r.json();
+      setEvents(Array.isArray(data) ? data : []);
+    } catch { setEvents([]); }
+    setEventsLoading(false);
+  };
+
+  const deleteGeofence = async (id) => {
+    if (!confirm("¿Eliminar esta geocerca?")) return;
+    try {
+      const r = await fetch(`${API_URL}/api/geofences/${id}`, { method: "DELETE", headers: authHeaders() });
+      const j = await r.json();
+      if (j.success) { showNotif("success", "Geocerca eliminada"); loadData(); }
+      else showNotif("error", j.error || "Error eliminando");
+    } catch { showNotif("error", "Error de conexión"); }
+  };
+
+  const createGeofence = async () => {
+    const { name, lat, lng, radius, device_id } = geoForm;
+    if (!name || !lat || !lng) { showNotif("error", "Nombre, latitud y longitud son requeridos"); return; }
+    try {
+      const r = await fetch(`${API_URL}/api/geofences`, {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ name, center_lat: parseFloat(lat), center_lng: parseFloat(lng), radius_meters: parseInt(radius), device_id: device_id || null })
+      });
+      const j = await r.json();
+      if (j.success) { showNotif("success", `Geocerca "${name}" creada`); setGeoForm({ visible: false, name: '', lat: '', lng: '', radius: 500, device_id: '' }); loadData(); }
+      else showNotif("error", j.error || "Error creando geocerca");
+    } catch { showNotif("error", "Error de conexión"); }
+  };
+
+  const showDeviceRoute = async (device) => {
+    const L = await import("leaflet");
+    if (routeLayerRef.current) { routeLayerRef.current.remove(); routeLayerRef.current = null; }
+    if (routeDevice === device.id) { setRouteDevice(null); return; }
+    try {
+      const r = await fetch(`${API_URL}/api/devices/${device.imei}/location-history`, { headers: authHeaders() });
+      const positions = await r.json();
+      if (!Array.isArray(positions) || positions.length < 2) { showNotif("error", "Sin historial de posiciones recientes"); return; }
+      const coords = positions.map(p => [parseFloat(p.latitude), parseFloat(p.longitude)]).filter(([a, b]) => !isNaN(a) && !isNaN(b));
+      if (coords.length < 2) { showNotif("error", "Pocas posiciones para trazar ruta"); return; }
+      routeLayerRef.current = L.polyline(coords, { color: "#3b82f6", weight: 3, opacity: 0.75 }).addTo(mapInstance.current);
+      mapInstance.current.fitBounds(routeLayerRef.current.getBounds(), { padding: [30, 30] });
+      setRouteDevice(device.id);
+      showNotif("success", `Ruta cargada — ${coords.length} posiciones`);
+    } catch { showNotif("error", "Error cargando historial de ruta"); }
+  };
+
   // ─── Filtered devices ─────────────────────────────────────────────────────
   const filteredDevices = devices.filter(d =>
     !searchQuery || d.name?.toLowerCase().includes(searchQuery.toLowerCase()) || d.imei?.includes(searchQuery)
@@ -676,6 +734,10 @@ export default function MapPage() {
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d={ICONS.heart}/></svg>
                 Salud
               </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "center", gridColumn: "span 2", background: routeDevice === selectedDevice.id ? "rgba(59,130,246,0.15)" : undefined, color: routeDevice === selectedDevice.id ? "#3b82f6" : undefined }} onClick={() => showDeviceRoute(selectedDevice)}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 12h18M3 12l6-6M3 12l6 6M21 12l-6-6M21 12l-6 6" /></svg>
+                {routeDevice === selectedDevice.id ? "Ocultar Ruta" : "Ver Ruta (24h)"}
+              </button>
             </div>
           </div>
 
@@ -683,8 +745,13 @@ export default function MapPage() {
           {selectedDevice.last_latitude && (
             <div style={{ padding: "8px 14px 12px", borderTop: "1px solid var(--border-default)" }}>
               <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--text-muted)", marginBottom: 4 }}>Coordenadas GPS</div>
-              <div style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-secondary)" }}>
-                {parseFloat(selectedDevice.last_latitude).toFixed(6)}, {parseFloat(selectedDevice.last_longitude).toFixed(6)}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <div style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-secondary)" }}>
+                  {parseFloat(selectedDevice.last_latitude).toFixed(6)}, {parseFloat(selectedDevice.last_longitude).toFixed(6)}
+                </div>
+                <a href={`https://www.google.com/maps?q=${selectedDevice.last_latitude},${selectedDevice.last_longitude}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#3b82f6", textDecoration: "none", flexShrink: 0, padding: "2px 6px", background: "rgba(59,130,246,0.1)", borderRadius: 4 }}>
+                  Maps ↗
+                </a>
               </div>
             </div>
           )}
@@ -787,8 +854,40 @@ export default function MapPage() {
             </div>
           ) : (
             <>
+              {/* Mediciones Bajo Demanda */}
+              <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 10, padding: "14px 16px", marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2"><path d={ICONS.heart}/></svg>
+                  Medir Ahora
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                  {[
+                    { label: "Pulso", cmd: "HR",    color: "#ef4444", icon: "M22 12h-4l-3 9L9 3l-3 9H2" },
+                    { label: "Presión", cmd: "BP",  color: "#3b82f6", icon: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" },
+                    { label: "SpO₂",   cmd: "SPO2", color: "#14b8a6", icon: "M12 2a10 10 0 1 0 10 10" },
+                    { label: "Temp",   cmd: null,   color: "#f97316", icon: "M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z", action: () => reqTemp(selectedDevice.imei) },
+                  ].map(({ label, cmd, color, icon, action }) => (
+                    <button key={label} className="btn btn-ghost" style={{ flexDirection: "column", gap: 6, padding: "12px 8px", height: "auto", alignItems: "center", borderColor: `${color}33`, background: `${color}0d` }}
+                      onClick={() => action ? action() : sendCmd(selectedDevice.imei, cmd)}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><path d={icon}/></svg>
+                      <span style={{ fontSize: 10.5, fontWeight: 600, color }}>{label}</span>
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                  <button className="btn btn-ghost" style={{ justifyContent: "center", fontSize: 11.5, background: "rgba(59,130,246,0.08)", borderColor: "rgba(59,130,246,0.2)" }}
+                    onClick={() => reqHealth(selectedDevice.imei)} disabled={healthReq.loading}>
+                    {healthReq.loading ? "Midiendo..." : "⚡ Todo a la vez"}
+                  </button>
+                  <button className="btn btn-ghost" style={{ justifyContent: "center", fontSize: 11.5, background: "rgba(34,197,94,0.08)", borderColor: "rgba(34,197,94,0.2)", color: "#22c55e" }}
+                    onClick={() => sendCmd(selectedDevice.imei, "ANYTIME", { value: 1 })}>
+                    ⏱ Auto continuo
+                  </button>
+                </div>
+              </div>
+
               {/* KPIs de Vitals */}
-              <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", marginBottom: 16 }}>
+              <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)", marginBottom: 16 }}>
                 <div className="kpi-card red">
                   <div className="kpi-label">Pulso</div>
                   <div className="kpi-value">{noData ? "—" : healthData.heart_rate || "—"}</div>
@@ -1079,55 +1178,166 @@ export default function MapPage() {
 
   const viewGeofences = () => (
     <div className="animate-fade-in" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      {/* Left: list */}
       <div className="data-table-wrapper">
         <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-default)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>Zonas Seguras</div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Perímetros de alerta asignados</div>
+            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{geofences.length} geocercas configuradas</div>
           </div>
-          <button className="btn btn-primary btn-sm"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d={ICONS.plus}/></svg> Nueva Zona</button>
+          <button className="btn btn-primary btn-sm" onClick={() => {
+            const d = selectedDevice;
+            setGeoForm({ visible: true, name: '', lat: d?.last_latitude ? parseFloat(d.last_latitude).toFixed(6) : '', lng: d?.last_longitude ? parseFloat(d.last_longitude).toFixed(6) : '', radius: 500, device_id: d?.id || '' });
+          }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d={ICONS.plus}/></svg> Nueva Zona
+          </button>
         </div>
         <table className="data-table">
-          <thead><tr><th>Nombre</th><th>Dispositivo</th><th>Radio</th><th>Acciones</th></tr></thead>
+          <thead><tr><th>Nombre</th><th>Dispositivo</th><th>Radio</th><th>Centro</th><th></th></tr></thead>
           <tbody>
-            {geofences.length === 0 && <tr><td colSpan={4} style={{ textAlign: "center", padding: "24px", color: "var(--text-muted)" }}>No hay geocercas configuradas</td></tr>}
+            {geofences.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", padding: "32px", color: "var(--text-muted)" }}>No hay geocercas — crea una con "Nueva Zona"</td></tr>}
             {geofences.map(g => (
-              <tr key={g.id}>
-                <td className="cell-primary">{g.name}</td>
-                <td style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{devices.find(d => d.id === g.device_id)?.name || "Sin asignar"}</td>
-                <td style={{ fontFamily: "monospace" }}>{(g.radius_meters/1000).toFixed(1)} km</td>
-                <td><button className="btn btn-ghost btn-sm" style={{ color: "var(--red)" }}>Eliminar</button></td>
+              <tr key={g.id} style={{ cursor: "pointer" }} onClick={() => {
+                if (mapInstance.current && g.center_lat && g.center_lng) {
+                  setActiveView("map");
+                  setTimeout(() => { mapInstance.current.setView([g.center_lat, g.center_lng], 15); }, 200);
+                }
+              }}>
+                <td><div className="cell-primary">{g.name}</div></td>
+                <td style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{devices.find(d => d.id === g.device_id)?.name || <span style={{ color: "var(--text-muted)" }}>Sin asignar</span>}</td>
+                <td style={{ fontFamily: "monospace", fontSize: 12 }}>{g.radius_meters >= 1000 ? `${(g.radius_meters/1000).toFixed(1)} km` : `${g.radius_meters} m`}</td>
+                <td style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-muted)" }}>
+                  {g.center_lat ? `${parseFloat(g.center_lat).toFixed(4)}, ${parseFloat(g.center_lng).toFixed(4)}` : "—"}
+                </td>
+                <td onClick={e => e.stopPropagation()}>
+                  <button className="btn btn-ghost btn-sm" style={{ color: "#ef4444" }} onClick={() => deleteGeofence(g.id)}>Eliminar</button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 10, minHeight: 400, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", flexDirection: "column", gap: 8 }}>
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.3 }}><path d={ICONS.pin}/></svg>
-        <div style={{ fontSize: 13.5 }}>Editor de Geocercas</div>
-        <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Selecciona o crea una zona para dibujar en el mapa</div>
-      </div>
+      {/* Right: creation form or placeholder */}
+      {geoForm.visible ? (
+        <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 10, overflow: "hidden" }}>
+          <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-default)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>Nueva Geocerca</div>
+            <button className="btn btn-ghost btn-sm" onClick={() => setGeoForm(f => ({ ...f, visible: false }))}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div style={{ padding: "20px 20px", display: "flex", flexDirection: "column", gap: 16 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>Nombre *</label>
+              <input value={geoForm.name} onChange={e => setGeoForm(f => ({ ...f, name: e.target.value }))} placeholder="Ej: Casa, Trabajo, Escuela..." style={{ width: "100%", background: "var(--bg-overlay)", border: "1px solid var(--border-default)", borderRadius: 6, padding: "9px 12px", fontSize: 13, color: "var(--text-primary)", outline: "none", boxSizing: "border-box" }} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>Latitud *</label>
+                <input value={geoForm.lat} onChange={e => setGeoForm(f => ({ ...f, lat: e.target.value }))} placeholder="6.244203" style={{ width: "100%", background: "var(--bg-overlay)", border: "1px solid var(--border-default)", borderRadius: 6, padding: "9px 12px", fontSize: 13, color: "var(--text-primary)", outline: "none", boxSizing: "border-box", fontFamily: "monospace" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>Longitud *</label>
+                <input value={geoForm.lng} onChange={e => setGeoForm(f => ({ ...f, lng: e.target.value }))} placeholder="-75.581215" style={{ width: "100%", background: "var(--bg-overlay)", border: "1px solid var(--border-default)", borderRadius: 6, padding: "9px 12px", fontSize: 13, color: "var(--text-primary)", outline: "none", boxSizing: "border-box", fontFamily: "monospace" }} />
+              </div>
+            </div>
+            {selectedDevice?.last_latitude && (
+              <button className="btn btn-ghost" style={{ justifyContent: "center", fontSize: 11.5 }}
+                onClick={() => setGeoForm(f => ({ ...f, lat: parseFloat(selectedDevice.last_latitude).toFixed(6), lng: parseFloat(selectedDevice.last_longitude).toFixed(6) }))}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                Usar posición de {selectedDevice.name}
+              </button>
+            )}
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>Radio: {geoForm.radius >= 1000 ? `${(geoForm.radius/1000).toFixed(1)} km` : `${geoForm.radius} m`}</label>
+              <input type="range" min="100" max="5000" step="100" value={geoForm.radius} onChange={e => setGeoForm(f => ({ ...f, radius: parseInt(e.target.value) }))} style={{ width: "100%", accentColor: "#3b82f6" }} />
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9.5, color: "var(--text-muted)", marginTop: 2 }}><span>100 m</span><span>5 km</span></div>
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>Dispositivo (opcional)</label>
+              <select value={geoForm.device_id} onChange={e => setGeoForm(f => ({ ...f, device_id: e.target.value }))} style={{ width: "100%", background: "var(--bg-overlay)", border: "1px solid var(--border-default)", borderRadius: 6, padding: "9px 12px", fontSize: 13, color: "var(--text-primary)", outline: "none" }}>
+                <option value="">Sin asignar</option>
+                {devices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
+            <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center" }} onClick={createGeofence}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d={ICONS.plus}/></svg>
+              Crear Geocerca
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", flexDirection: "column", gap: 12, minHeight: 300 }}>
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.25 }}><path d={ICONS.pin}/></svg>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 4 }}>Zonas de alerta</div>
+            <div style={{ fontSize: 11.5, maxWidth: 220 }}>Crea una nueva zona para recibir alertas cuando el reloj entre o salga del perímetro.</div>
+          </div>
+          <button className="btn btn-primary" onClick={() => setGeoForm(f => ({ ...f, visible: true }))}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d={ICONS.plus}/></svg>
+            Nueva Zona
+          </button>
+        </div>
+      )}
     </div>
   );
 
-  const viewEvents = () => (
-    <div className="animate-fade-in data-table-wrapper">
-      <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-default)" }}>
-        <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>Feed de Eventos en Tiempo Real</div>
-        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Alertas SOS, caídas, y batería baja</div>
+  const viewEvents = () => {
+    const typeInfo = {
+      SOS: { label: "SOS", color: "#ef4444", bg: "rgba(239,68,68,0.1)" },
+      FALL_DOWN: { label: "Caída", color: "#f97316", bg: "rgba(249,115,22,0.1)" },
+      LOW_BATTERY: { label: "Batería baja", color: "#eab308", bg: "rgba(234,179,8,0.1)" },
+      TAKE_OFF: { label: "Retirado", color: "#8b5cf6", bg: "rgba(139,92,246,0.1)" },
+      POWER_OFF: { label: "Apagado", color: "#475569", bg: "rgba(71,85,105,0.1)" },
+      POWER_ON: { label: "Encendido", color: "#22c55e", bg: "rgba(34,197,94,0.1)" },
+      HEALTH_HR_ABNORMAL: { label: "Pulso anormal", color: "#ef4444", bg: "rgba(239,68,68,0.1)" },
+      HEALTH_BP_HIGH: { label: "PA alta", color: "#ef4444", bg: "rgba(239,68,68,0.1)" },
+      HEALTH_BP_LOW: { label: "PA baja", color: "#3b82f6", bg: "rgba(59,130,246,0.1)" },
+      HEALTH_SPO2_LOW: { label: "SpO2 bajo", color: "#14b8a6", bg: "rgba(20,184,166,0.1)" },
+    };
+    return (
+      <div className="animate-fade-in data-table-wrapper">
+        <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-default)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>Eventos y Alertas</div>
+            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{events.length} alertas registradas</div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={loadEvents} disabled={eventsLoading}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className={eventsLoading ? "animate-spin" : ""}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+            Actualizar
+          </button>
+        </div>
+        <table className="data-table">
+          <thead><tr><th>Tipo</th><th>Dispositivo</th><th>Severidad</th><th>Fecha y Hora</th><th>Mensaje</th><th>Estado</th></tr></thead>
+          <tbody>
+            {events.length === 0 && !eventsLoading && (
+              <tr><td colSpan={6} style={{ textAlign: "center", padding: "48px", color: "var(--text-muted)" }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ margin: "0 auto 8px", display: "block", opacity: 0.3 }}><path d={ICONS.bell}/></svg>
+                Sin alertas registradas
+              </td></tr>
+            )}
+            {eventsLoading && events.length === 0 && (
+              <tr><td colSpan={6} style={{ textAlign: "center", padding: "32px", color: "var(--text-muted)" }}>Cargando...</td></tr>
+            )}
+            {events.map(e => {
+              const t = typeInfo[e.type] || { label: e.type, color: "var(--text-muted)", bg: "var(--bg-overlay)" };
+              return (
+                <tr key={e.id}>
+                  <td><span style={{ fontSize: 11, fontWeight: 700, color: t.color, background: t.bg, padding: "2px 8px", borderRadius: 4 }}>{t.label}</span></td>
+                  <td><div className="cell-primary">{e.device_name || "—"}</div><div className="cell-mono">{e.imei || ""}</div></td>
+                  <td><span className={`badge ${e.severity === "HIGH" || e.severity === "CRITICAL" ? "offline" : e.severity === "MEDIUM" ? "info" : "online"}`}>{e.severity || "—"}</span></td>
+                  <td style={{ fontSize: 12, color: "var(--text-muted)" }}>{fmt(e.triggered_at)}</td>
+                  <td style={{ fontSize: 12, color: "var(--text-secondary)", maxWidth: 200 }}>{e.message || "—"}</td>
+                  <td><span style={{ fontSize: 10, color: e.status === "NEW" ? "#f97316" : e.status === "RESOLVED" ? "#22c55e" : "var(--text-muted)", fontWeight: 600 }}>{e.status || "—"}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
-      <table className="data-table">
-        <thead><tr><th>Tipo</th><th>Dispositivo</th><th>Fecha y Hora</th><th>Detalles</th></tr></thead>
-        <tbody>
-          <tr><td colSpan={4} style={{ textAlign: "center", padding: "48px", color: "var(--text-muted)" }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ margin: "0 auto 8px", opacity: 0.3 }}><path d={ICONS.bell}/></svg>
-            No hay eventos recientes
-          </td></tr>
-        </tbody>
-      </table>
-    </div>
-  );
+    );
+  };
 
   const viewSettings = () => (
     <div className="animate-fade-in" style={{ display: "grid", gridTemplateColumns: "240px 1fr", gap: 16 }}>
@@ -1330,7 +1540,7 @@ export default function MapPage() {
         @keyframes slideUp { from { opacity: 0; transform: translateX(-50%) translateY(12px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
       `}</style>
       {/* Build Version Tag for Verification */}
-      <div style={{ position: "fixed", bottom: 4, right: 8, fontSize: 8, color: "var(--text-muted)", opacity: 0.3, pointerEvents: "none" }}>Build v2.6.S</div>
+      <div style={{ position: "fixed", bottom: 4, right: 8, fontSize: 8, color: "var(--text-muted)", opacity: 0.3, pointerEvents: "none" }}>Build v3.0.S</div>
       {/* Command feedback toast */}
       {cmdNotif && (
         <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: cmdNotif.type === "success" ? "#16a34a" : "#dc2626", color: "#fff", padding: "10px 20px", borderRadius: 8, fontWeight: 600, fontSize: 13, zIndex: 9999, boxShadow: "0 4px 16px rgba(0,0,0,0.35)", display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap", animation: "slideUp 0.2s ease" }}>
