@@ -204,6 +204,8 @@ class ProtocolParser {
           return { type: 'FIND', imei, timestamp: new Date() };
         case 'HRTSTART': // 🔥 Health measurement start echo
           return { type: 'HRTSTART', imei, timestamp: new Date() };
+        case 'VERNO': // Firmware version response
+          return { type: 'VERNO', imei, version: payloadParts[1] || payload, timestamp: new Date() };
         case 'DEVICEFUNCCOUNT':
         case 'CALLLOG':
         case 'ICCID':
@@ -986,7 +988,10 @@ class ProtocolParser {
         responseContent = imei10; // Responder con el IMEI si amigo agregado
         break;
       case 'TS':
-        responseContent = 'TS'; // Dispositivo responderá con información
+        responseContent = 'TS';
+        break;
+      case 'VERNO':
+        responseContent = 'VERNO';
         break;
       case 'UNKNOWN':
         return null;
@@ -1038,7 +1043,7 @@ class ProtocolParser {
       case 'SOS1':
       case 'SOS2':
       case 'SOS3':
-        commandContent = `${command},${params.phone}`;
+        commandContent = `${commandKey},${params.phone}`;
         break;
       case 'SOS':
         // Configurar 3 números SOS

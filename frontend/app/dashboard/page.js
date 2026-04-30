@@ -64,6 +64,10 @@ export default function MapPage() {
   const [fallSens, setFallSens] = useState(3);
   const [fallReq, setFallReq] = useState({ loading: false, status: "" });
 
+  // Command feedback toast
+  const [cmdNotif, setCmdNotif] = useState(null);
+  const cmdNotifTimer = useRef(null);
+
   // Map
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
@@ -294,11 +298,28 @@ export default function MapPage() {
   };
 
   // ─── Commands ─────────────────────────────────────────────────────────────
+  const showNotif = (type, message) => {
+    setCmdNotif({ type, message });
+    if (cmdNotifTimer.current) clearTimeout(cmdNotifTimer.current);
+    cmdNotifTimer.current = setTimeout(() => setCmdNotif(null), 4500);
+  };
+
   const sendCmd = async (imei, command, extra = {}) => {
     try {
-      const r = await fetch(`${API_URL}/api/devices/command`, { method: "POST", headers: authHeaders(), body: JSON.stringify({ imei, command, ...extra }) });
-      return await r.json();
-    } catch { return { success: false }; }
+      const r = await fetch(`${API_URL}/api/devices/command`, { method: "POST", headers: authHeaders(), body: JSON.stringify({ imei, command, params: extra }) });
+      const json = await r.json();
+      const healthCmds = ['HR', 'BP', 'SPO2'];
+      if (json.success) {
+        const note = healthCmds.includes(command.toUpperCase()) ? ` — revisa Salud en ~30s` : '';
+        showNotif('success', `${command} enviado${note}`);
+      } else {
+        showNotif('error', json.error || `Error enviando ${command}`);
+      }
+      return json;
+    } catch {
+      showNotif('error', 'Error de conexión con el servidor');
+      return { success: false };
+    }
   };
 
   const reqLocation = async (imei) => {
@@ -1129,55 +1150,149 @@ export default function MapPage() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        {/* SISTEMA */}
         <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 10, overflow: "hidden" }}>
-        <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-default)", display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 32, height: 32, background: "rgba(168,85,247,0.1)", border: "1px solid rgba(168,85,247,0.2)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a855f7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS.settings}/></svg>
+          <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-default)", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 32, height: 32, background: "rgba(168,85,247,0.1)", border: "1px solid rgba(168,85,247,0.2)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a855f7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS.settings}/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>Sistema y Dispositivo</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Control, energía y restauraciones</div>
+            </div>
           </div>
-          <div>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>Control de Dispositivo</div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Configuración remota y reinicio</div>
+          <div style={{ padding: "16px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "12px 16px" }} disabled={!selectedDevice} onClick={() => sendCmd(selectedDevice?.imei, "RESET")}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5"/></svg> Reiniciar (RESET)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "right" }}>Reinicia<br/>el reloj</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "12px 16px" }} disabled={!selectedDevice} onClick={() => sendCmd(selectedDevice?.imei, "POWEROFF")}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--red)" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/></svg> Apagar (POWEROFF)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "right" }}>Apaga sin<br/>tocar el equipo</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "12px 16px" }} disabled={!selectedDevice} onClick={() => confirm("¿Seguro que deseas restaurar el reloj a fábrica? Se perderán todos los datos.") && sendCmd(selectedDevice?.imei, "FACTORY")}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--orange)" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 2v6h-6M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5"/></svg> Fábrica (FACTORY)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "right" }}>Borra ajustes<br/>del reloj</div>
+              </button>
+            </div>
           </div>
         </div>
-        <div style={{ padding: "16px" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "12px 16px" }} disabled={!selectedDevice} onClick={() => sendCmd(selectedDevice?.imei, "RESET")}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5"/></svg> Reiniciar Dispositivo (RESET)</div>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-            </button>
-            <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "12px 16px" }} disabled={!selectedDevice} onClick={() => sendCmd(selectedDevice?.imei, "PWROFF")}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--red)" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/></svg> Apagado Remoto (PWROFF)</div>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-            </button>
-            {!selectedDevice && <div style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "center", marginTop: 4 }}>Selecciona un dispositivo primero</div>}
-          </div>
-        </div>
-      </div>
 
-      <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 10, overflow: "hidden" }}>
-        <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-default)", display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 32, height: 32, background: "rgba(20,184,166,0.1)", border: "1px solid rgba(20,184,166,0.2)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#14b8a6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS.radio}/></svg>
+        {/* RED Y COMUNICACIÓN */}
+        <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 10, overflow: "hidden" }}>
+          <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-default)", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 32, height: 32, background: "rgba(20,184,166,0.1)", border: "1px solid rgba(20,184,166,0.2)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#14b8a6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS.radio}/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>Red y Parámetros</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Frecuencia, servidor, idioma y estado</div>
+            </div>
           </div>
-          <div>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>Parámetros de Red</div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Intervalos de reporte IP y Server</div>
+          <div style={{ padding: "16px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => { const int = prompt("Intervalo de reporte GPS en segundos (ej. 600):"); if(int) sendCmd(selectedDevice?.imei, "UPLOAD", { interval: int }); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Reporte GPS (UPLOAD)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Cada cuánto reporta GPS</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => { const ip = prompt("IP del servidor (ej. mstr.com):"); const port = prompt("Puerto:"); if(ip && port) sendCmd(selectedDevice?.imei, "IP", { ip, port }); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Servidor IP</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Cambia host y puerto TCP</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => { const lang = prompt("Idioma (ej. 0=Inglés, 3=Español):"); const tz = prompt("Zona horaria (ej. E,5 o W,5):"); if(lang && tz) sendCmd(selectedDevice?.imei, "LZ", { language: lang, timezone: tz }); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Idioma/Zona (LZ)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Idioma y zona horaria</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => { const pw = prompt("Nueva contraseña (6 dígitos):"); if(pw) sendCmd(selectedDevice?.imei, "PW", { password: pw }); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Contraseña (PW)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Contraseña de comandos</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => sendCmd(selectedDevice?.imei, "TS")}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Estado (TS)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Lee batería, red y GPS</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => sendCmd(selectedDevice?.imei, "VERNO")}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Versión (VERNO)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Consulta versión firmware</div>
+              </button>
+            </div>
           </div>
         </div>
-        <div style={{ padding: "16px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid var(--border-subtle)" }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-secondary)" }}>Frecuencia de Reporte</div>
-            <span className="badge info">600s</span>
+
+        {/* LLAMADAS Y MONITOREO */}
+        <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 10, overflow: "hidden" }}>
+          <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-default)", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 32, height: 32, background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS.phone || "M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"}/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>Voz y Contactos</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Llamada saliente, escucha y número central</div>
+            </div>
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid var(--border-subtle)" }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-secondary)" }}>Centro de Servidor IP</div>
-            <span style={{ fontSize: 12, fontFamily: "monospace", color: "var(--text-muted)" }}>fulltranki.com:7070</span>
+          <div style={{ padding: "16px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => { const ph = prompt("Número a llamar:"); if(ph) sendCmd(selectedDevice?.imei, "CALL", { phone: ph }); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Forzar Llamada (CALL)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Ordena llamada saliente</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => { const ph = prompt("Número espía:"); if(ph) sendCmd(selectedDevice?.imei, "MONITOR", { phone: ph }); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Monitoreo (MONITOR)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Devuelve llamada de escucha</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => { const ph = prompt("Número central:"); if(ph) sendCmd(selectedDevice?.imei, "CENTER", { phone: ph }); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Número Central (CENTER)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Número administrador</div>
+              </button>
+            </div>
           </div>
-          <button className="btn btn-ghost" style={{ width: "100%", justifyContent: "center", marginTop: 12, fontSize: 12.5 }} disabled={!selectedDevice}>
-            Modificar Parámetros
-          </button>
         </div>
-      </div>
+
+        {/* SALUD Y SOS */}
+        <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 10, overflow: "hidden" }}>
+          <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-default)", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 32, height: 32, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS.heart}/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>Salud y Emergencias</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Contactos SOS y mediciones remotas</div>
+            </div>
+          </div>
+          <div style={{ padding: "16px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => { const p1 = prompt("Número SOS 1:"); if(p1) sendCmd(selectedDevice?.imei, "SOS1", { phone: p1 }); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>SOS 1</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Primer contacto emergencia</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => { const p2 = prompt("Número SOS 2:"); if(p2) sendCmd(selectedDevice?.imei, "SOS2", { phone: p2 }); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>SOS 2</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Segundo contacto emergencia</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => { const p3 = prompt("Número SOS 3:"); if(p3) sendCmd(selectedDevice?.imei, "SOS3", { phone: p3 }); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>SOS 3</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Tercer contacto emergencia</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => sendCmd(selectedDevice?.imei, "HR")}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Medir Pulso (HR)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Frecuencia cardiaca ahora</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => sendCmd(selectedDevice?.imei, "BP")}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Medir Presión (BP)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Presión arterial ahora</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => sendCmd(selectedDevice?.imei, "SPO2")}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Medir Oxígeno (SPO2)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Oxígeno en sangre ahora</div>
+              </button>
+              <button className="btn btn-ghost" style={{ justifyContent: "space-between", padding: "8px 12px" }} disabled={!selectedDevice} onClick={() => sendCmd(selectedDevice?.imei, "ANYTIME", { value: 1 })}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>Salud Continua (ANYTIME)</div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Activa medición automática</div>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1212,9 +1327,19 @@ export default function MapPage() {
       <style jsx>{`
         @keyframes spin { to { transform: rotate(360deg); } }
         .animate-spin { animation: spin 0.8s linear infinite; }
+        @keyframes slideUp { from { opacity: 0; transform: translateX(-50%) translateY(12px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
       `}</style>
       {/* Build Version Tag for Verification */}
-      <div style={{ position: "fixed", bottom: 4, right: 8, fontSize: 8, color: "var(--text-muted)", opacity: 0.3, pointerEvents: "none" }}>Build v2.5.S</div>
+      <div style={{ position: "fixed", bottom: 4, right: 8, fontSize: 8, color: "var(--text-muted)", opacity: 0.3, pointerEvents: "none" }}>Build v2.6.S</div>
+      {/* Command feedback toast */}
+      {cmdNotif && (
+        <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: cmdNotif.type === "success" ? "#16a34a" : "#dc2626", color: "#fff", padding: "10px 20px", borderRadius: 8, fontWeight: 600, fontSize: 13, zIndex: 9999, boxShadow: "0 4px 16px rgba(0,0,0,0.35)", display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap", animation: "slideUp 0.2s ease" }}>
+          {cmdNotif.type === "success"
+            ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+            : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>}
+          {cmdNotif.message}
+        </div>
+      )}
     </div>
   );
 }
