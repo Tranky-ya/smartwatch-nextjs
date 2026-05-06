@@ -268,6 +268,65 @@ class APIServer {
       }
     });
 
+    this.app.post('/api/auth/register', async (req, res) => {
+      try {
+        const { email, password, full_name } = req.body;
+
+        if (!email || !password || !full_name) {
+          return res.status(400).json({ error: 'Email, password y full_name son requeridos' });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+        const normalizedFullName = full_name.trim();
+        if (!normalizedEmail || !normalizedFullName) {
+          return res.status(400).json({ error: 'Email y full_name no pueden estar vacios' });
+        }
+
+        const existingUser = await User.findOne({ where: { email: normalizedEmail } });
+        if (existingUser) {
+          return res.status(409).json({ error: 'El email ya está registrado' });
+        }
+
+        const defaultOrgId = process.env.DEFAULT_ORG_ID || 'e5998eca-315a-44c6-a352-90d22380c5e8';
+        const defaultOrgName = process.env.DEFAULT_ORG_NAME || 'Telvoz';
+        const [organization] = await Organization.findOrCreate({
+          where: { id: defaultOrgId },
+          defaults: { id: defaultOrgId, name: defaultOrgName, is_active: true }
+        });
+
+        const password_hash = await bcrypt.hash(password, 10);
+        const user = await User.create({
+          organization_id: organization.id,
+          email: normalizedEmail,
+          password_hash,
+          full_name: normalizedFullName,
+          role: 'VIEWER',
+          is_active: true
+        });
+
+        const token = jwt.sign(
+          { id: user.id, email: user.email, role: user.role, organization_id: user.organization_id },
+          JWT_SECRET,
+          { expiresIn: '24h' }
+        );
+
+        res.status(201).json({
+          message: 'Registro exitoso',
+          user: {
+            id: user.id,
+            email: user.email,
+            full_name: user.full_name,
+            role: user.role,
+            organization_id: user.organization_id
+          },
+          token
+        });
+      } catch (error) {
+        console.error('Error en registro público:', error);
+        res.status(500).json({ error: 'Error al registrar usuario' });
+      }
+    });
+
     // ============================================
     // GESTIÓN DE USUARIOS
     // ============================================
