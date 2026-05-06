@@ -74,6 +74,10 @@ export default function MapPage() {
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
 
+  // Device console state
+  const [consoleLoading, setConsoleLoading] = useState(false);
+  const [consoleUpdated, setConsoleUpdated] = useState(null);
+
   // Map
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
@@ -467,6 +471,26 @@ export default function MapPage() {
       setRouteDevice(device.id);
       showNotif("success", `Ruta cargada — ${coords.length} posiciones`);
     } catch { showNotif("error", "Error cargando historial de ruta"); }
+  };
+
+  const refreshDeviceConsole = async () => {
+    if (!selectedDevice) return;
+    setConsoleLoading(true);
+    await sendCmd(selectedDevice.imei, "TS");
+    await sendCmd(selectedDevice.imei, "VERNO");
+    // Wait for device to respond and backend to save
+    setTimeout(async () => {
+      try {
+        const r = await fetch(`${API_URL}/api/devices`, { headers: authHeaders() });
+        const dData = await r.json();
+        if (Array.isArray(dData)) {
+          setDevices(dData);
+          const updated = dData.find(d => d.imei === selectedDevice.imei);
+          if (updated) { setSelectedDevice(updated); setConsoleUpdated(new Date()); }
+        }
+      } catch { /* ignore */ }
+      setConsoleLoading(false);
+    }, 6000);
   };
 
   // ─── Filtered devices ─────────────────────────────────────────────────────
@@ -1503,6 +1527,94 @@ export default function MapPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* CONSOLA DE DISPOSITIVO — full width */}
+      <div style={{ gridColumn: "1 / -1", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: 10, overflow: "hidden", marginTop: 0 }}>
+        <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-default)", display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 32, height: 32, background: "rgba(20,184,166,0.1)", border: "1px solid rgba(20,184,166,0.2)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#14b8a6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17l6-6-6-6M12 19h8"/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)" }}>Consola de Dispositivo</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                Respuestas de TS (Estado) y VERNO (Firmware)
+                {consoleUpdated && <span style={{ marginLeft: 8, color: "#22c55e" }}>Actualizado {consoleUpdated.toLocaleTimeString()}</span>}
+              </div>
+            </div>
+          </div>
+          <button className="btn btn-ghost" style={{ fontSize: 12, padding: "6px 12px", display: "flex", alignItems: "center", gap: 6 }}
+            disabled={!selectedDevice || consoleLoading}
+            onClick={refreshDeviceConsole}>
+            {consoleLoading
+              ? <><span className="animate-spin" style={{ display: "inline-block", width: 12, height: 12, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%" }}></span> Aguardando respuesta...</>
+              : <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5"/></svg> Leer Estado y Versión (TS + VERNO)</>
+            }
+          </button>
+        </div>
+
+        {!selectedDevice ? (
+          <div style={{ padding: 24, textAlign: "center", color: "var(--text-muted)", fontSize: 12 }}>Selecciona un dispositivo para ver su estado</div>
+        ) : (
+          <div style={{ padding: 16 }}>
+            {/* Core fields */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8, marginBottom: 16 }}>
+              {[
+                { label: "Firmware", value: selectedDevice.firmware_version || selectedDevice.device_info?.verno || "—" },
+                { label: "Batería", value: selectedDevice.battery_level != null ? `${selectedDevice.battery_level}%` : "—" },
+                { label: "Señal", value: selectedDevice.signal_strength != null ? `${selectedDevice.signal_strength}%` : "—" },
+                { label: "Idioma", value: selectedDevice.language || selectedDevice.device_info?.language || "—" },
+                { label: "Modelo", value: selectedDevice.model || selectedDevice.device_info?.ty || selectedDevice.device_info?.config?.ty || "—" },
+                { label: "IMEI", value: selectedDevice.imei },
+              ].map(({ label, value }) => (
+                <div key={label} style={{ background: "var(--bg-subtle)", border: "1px solid var(--border-subtle)", borderRadius: 8, padding: "10px 12px" }}>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>{label}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", wordBreak: "break-all" }}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* CONFIG parameters */}
+            {selectedDevice.device_info?.config && (
+              <>
+                <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)", marginBottom: 8 }}>
+                  Parámetros CONFIG
+                  {selectedDevice.device_info?.config_updated_at && <span style={{ marginLeft: 8, fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>({new Date(selectedDevice.device_info.config_updated_at).toLocaleString()})</span>}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 6 }}>
+                  {Object.entries(selectedDevice.device_info.config).map(([k, v]) => (
+                    <div key={k} style={{ background: "var(--bg-subtle)", borderRadius: 6, padding: "6px 10px", border: "1px solid var(--border-subtle)" }}>
+                      <div style={{ fontSize: 9.5, color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase" }}>{k}</div>
+                      <div style={{ fontSize: 11.5, color: "var(--text-primary)", wordBreak: "break-all", marginTop: 2 }}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* TS device_info fields (raw) when CONFIG not available */}
+            {!selectedDevice.device_info?.config && selectedDevice.device_info && Object.keys(selectedDevice.device_info).filter(k => !['last_protocol', 'config', 'config_updated_at', 'verno', 'verno_updated_at'].includes(k)).length > 0 && (
+              <>
+                <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)", marginBottom: 8 }}>Estado del Dispositivo (TS)</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 6 }}>
+                  {Object.entries(selectedDevice.device_info).filter(([k]) => !['last_protocol', 'config', 'config_updated_at', 'verno', 'verno_updated_at'].includes(k)).map(([k, v]) => (
+                    <div key={k} style={{ background: "var(--bg-subtle)", borderRadius: 6, padding: "6px 10px", border: "1px solid var(--border-subtle)" }}>
+                      <div style={{ fontSize: 9.5, color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase" }}>{k}</div>
+                      <div style={{ fontSize: 11.5, color: "var(--text-primary)", wordBreak: "break-all", marginTop: 2 }}>{String(v)}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {!selectedDevice.device_info?.config && (!selectedDevice.device_info || Object.keys(selectedDevice.device_info).filter(k => !['last_protocol'].includes(k)).length === 0) && (
+              <div style={{ fontSize: 12, color: "var(--text-muted)", textAlign: "center", padding: "12px 0" }}>
+                Pulsa "Leer Estado y Versión" para consultar el dispositivo
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

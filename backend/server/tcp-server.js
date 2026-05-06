@@ -383,6 +383,20 @@ class TCPServer extends EventEmitter {
         case 'TS':
           await this.handleTerminalStatus(device, parsed);
           break;
+        case 'VERNO':
+          await device.update({
+            firmware_version: parsed.version || device.firmware_version,
+            device_info: { ...(device.device_info || {}), verno: parsed.version, verno_updated_at: new Date().toISOString() }
+          });
+          console.log(`[VERNO] [${device.imei}] Firmware: ${parsed.version}`);
+          break;
+        case 'CONFIG':
+          await device.update({
+            firmware_version: parsed.parameters?.vr || device.firmware_version,
+            device_info: { ...(device.device_info || {}), config: parsed.parameters, config_updated_at: new Date().toISOString() }
+          });
+          console.log(`[CONFIG] [${device.imei}] Config guardada (${Object.keys(parsed.parameters || {}).length} params): vr=${parsed.parameters?.vr || 'N/A'}`);
+          break;
         case 'DEVICEFUNCCOUNT':
           console.log(`[STATS] [${device.imei}] Estadísticas de funciones recibidas`);
           break;
