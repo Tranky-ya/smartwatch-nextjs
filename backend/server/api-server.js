@@ -1352,8 +1352,8 @@ class APIServer {
             message = success ? 'Comando de temperatura enviado' : 'Error enviando comando';
             break;
           case 'measureAllHealth':
-            success = await this.tcpServer.sendCommand(imei, 'HT', params || {});
-            message = success ? 'Comando de medición integral enviado' : 'Error enviando comando';
+            success = await this.tcpServer.sendCommand(imei, 'HRTSTART', params || {});
+            message = success ? 'Comando de medición de salud enviado' : 'Error enviando comando';
             break;
           default:
             return res.status(400).json({ error: 'Comando no válido o no implementado' });
