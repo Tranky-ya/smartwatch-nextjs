@@ -1335,6 +1335,26 @@ class APIServer {
             success = await this.tcpServer.findDevice(imei);
             message = success ? 'Comando de búsqueda enviado' : 'Error enviando comando';
             break;
+          case 'measureHeartRate':
+            success = await this.tcpServer.sendCommand(imei, 'HR', params || {});
+            message = success ? 'Comando de frecuencia cardíaca enviado' : 'Error enviando comando';
+            break;
+          case 'measureBloodPressure':
+            success = await this.tcpServer.sendCommand(imei, 'BP', params || {});
+            message = success ? 'Comando de presión arterial enviado' : 'Error enviando comando';
+            break;
+          case 'measureSpo2':
+            success = await this.tcpServer.sendCommand(imei, 'SPO2', params || {});
+            message = success ? 'Comando de oxígeno enviado' : 'Error enviando comando';
+            break;
+          case 'measureTemperature':
+            success = await this.tcpServer.sendCommand(imei, 'BT', params || {});
+            message = success ? 'Comando de temperatura enviado' : 'Error enviando comando';
+            break;
+          case 'measureAllHealth':
+            success = await this.tcpServer.sendCommand(imei, 'HT', params || {});
+            message = success ? 'Comando de medición integral enviado' : 'Error enviando comando';
+            break;
           default:
             return res.status(400).json({ error: 'Comando no válido o no implementado' });
         }
